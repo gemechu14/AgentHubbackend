@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.env
+.env.*
+
+# Sphinx build output (but allow for GitHub Pages deployment)
+docs/_build/
