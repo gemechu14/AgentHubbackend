@@ -467,7 +467,7 @@ def change_password(
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Password Changed Successfully - SmartSchema</title>
+    <title>Password Changed Successfully - AgentHub</title>
     <style>
         body {{ font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f6f8fb; margin: 0; padding: 0; color: #333; }}
         .container {{ max-width: 600px; margin: 40px auto; background-color: #fff; border-radius: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.05); overflow: hidden; }}
@@ -479,17 +479,17 @@ def change_password(
 <body>
     <div class="container">
         <div class="header">
-            <h2>SmartSchema</h2>
+            <h2>AgentHub</h2>
         </div>
         <div class="content">
             <h3>Password Changed Successfully</h3>
             <p>Hello {user.first_name or user.email},</p>
-            <p>This is a confirmation that your password for <strong>SmartSchema</strong> was successfully updated.</p>
+            <p>This is a confirmation that your password for <strong>AgentHub</strong> was successfully updated.</p>
             <p>If you did not make this change, please <a href="mailto:{settings.mail_from}" style="color: #0f172a; text-decoration: underline;">contact our support team</a> immediately.</p>
-            <p>Thank you for keeping your account secure,<br>The SmartSchema Team</p>
+            <p>Thank you for keeping your account secure,<br>The AgentHub Team</p>
         </div>
         <div class="footer">
-            &copy; {__import__('datetime').datetime.utcnow().year} SmartSchema. All rights reserved.
+            &copy; {__import__('datetime').datetime.utcnow().year} AgentHub. All rights reserved.
         </div>
     </div>
 </body>
@@ -805,7 +805,7 @@ def password_reset(body: PasswordResetBody, db: Session = Depends(get_db)):
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Password Changed Successfully - SmartSchema</title>
+    <title>Password Changed Successfully - AgentHub</title>
     <style>
         body {{ font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f6f8fb; margin: 0; padding: 0; color: #333; }}
         .container {{ max-width: 600px; margin: 40px auto; background-color: #fff; border-radius: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.05); overflow: hidden; }}
@@ -817,17 +817,17 @@ def password_reset(body: PasswordResetBody, db: Session = Depends(get_db)):
 <body>
     <div class="container">
         <div class="header">
-            <h2>SmartSchema</h2>
+            <h2>AgentHub</h2>
         </div>
         <div class="content">
             <h3>Password Changed Successfully</h3>
             <p>Hello {user.first_name or user.email},</p>
-            <p>This is a confirmation that your password for <strong>SmartSchema</strong> was successfully updated.</p>
+            <p>This is a confirmation that your password for <strong>AgentHub</strong> was successfully updated.</p>
             <p>If you did not make this change, please <a href="mailto:{settings.mail_from}" style="color: #0f172a; text-decoration: underline;">contact our support team</a> immediately.</p>
-            <p>Thank you for keeping your account secure,<br>The SmartSchema Team</p>
+            <p>Thank you for keeping your account secure,<br>The AgentHub Team</p>
         </div>
         <div class="footer">
-            &copy; {__import__('datetime').datetime.utcnow().year} SmartSchema. All rights reserved.
+            &copy; {__import__('datetime').datetime.utcnow().year} AgentHub. All rights reserved.
         </div>
     </div>
 </body>

@@ -82,3 +82,4 @@ def stop_scheduler() -> None:
     finally:
         _scheduler = None
 
+
