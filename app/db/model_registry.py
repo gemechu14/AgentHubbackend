@@ -14,6 +14,7 @@ from app.models import password_reset
 # from app.models import launch_token  # Model file doesn't exist, commented out
 # from app.models import survey  # Model file doesn't exist, commented out
 from app.models import agent  # noqa
+from app.models import chat  # noqa
 
 # from app.models import projects  # <- add new modules like this
 

@@ -18,6 +18,7 @@ from app.api.routes.contact import router as contact_router
 from app.api.routes.surveys import router as surveys_router
 from app.api.routes.survey_public import router as survey_public_router
 from app.api.routes.agents import router as agents_router
+from app.api.routes.chats import router as chats_router
 
 app = FastAPI(
     title=settings.app_name,
@@ -49,6 +50,7 @@ app.include_router(contact_router)
 app.include_router(surveys_router)
 app.include_router(survey_public_router)
 app.include_router(agents_router)
+app.include_router(chats_router)
 
 # Start pipeline scheduler on app startup
 @app.on_event("startup")
