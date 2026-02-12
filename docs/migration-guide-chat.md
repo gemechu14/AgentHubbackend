@@ -312,3 +312,4 @@ This will:
 
 **Warning:** This will delete all chat data! Only use this in development or if you have backups.
 
+

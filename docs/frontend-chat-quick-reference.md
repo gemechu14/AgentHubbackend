@@ -19,6 +19,7 @@ Authorization: Bearer <access_token>
 | GET | `/chats/{account_id}/{agent_id}/{chat_id}` | Get chat with messages |
 | PATCH | `/chats/{account_id}/{agent_id}/{chat_id}` | Update chat title |
 | DELETE | `/chats/{account_id}/{agent_id}/{chat_id}` | Delete chat |
+| PATCH | `/chats/{account_id}/{agent_id}/{chat_id}/messages/{message_id}` | Update message |
 | POST | `/chats/{account_id}/{agent_id}/{chat_id}/messages` | Send message |
 
 ## cURL Examples
@@ -57,7 +58,15 @@ curl -X DELETE "https://api.example.com/chats/{account_id}/{agent_id}/{chat_id}"
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
-### 6. Send Message (Most Important!)
+### 6. Update Message
+```bash
+curl -X PATCH "https://api.example.com/chats/{account_id}/{agent_id}/{chat_id}/messages/{message_id}" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Updated question text"}'
+```
+
+### 7. Send Message (Most Important!)
 ```bash
 curl -X POST "https://api.example.com/chats/{account_id}/{agent_id}/{chat_id}/messages" \
   -H "Authorization: Bearer YOUR_TOKEN" \

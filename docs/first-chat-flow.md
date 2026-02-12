@@ -271,3 +271,4 @@ const response = await sendMessage(accountId, agentId, chat.id, "What are the to
 - All messages are stored permanently
 - Schema is cached after first load (fast subsequent queries)
 
+

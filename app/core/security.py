@@ -54,6 +54,21 @@ def make_launch_token(integration_id: str, credential_id: str, account_id: str, 
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=ALGO)
 
+def make_agent_launch_token(agent_id: str, credential_id: str, account_id: str, ttl_seconds: int = 300) -> str:
+    """Create a short-lived JWT for launching the agent embed widget.
+    
+    Contains minimal claims: agent id, credential id, account id, issued at and expiry.
+    """
+    payload = {
+        "iss": settings.jwt_issuer,
+        "agent_id": str(agent_id),
+        "cred_id": str(credential_id),
+        "aid": str(account_id),
+        "iat": int(now_utc().timestamp()),
+        "exp": int((now_utc() + timedelta(seconds=ttl_seconds)).timestamp()),
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=ALGO)
+
 def make_refresh_token(sub: str, account_id: str, jti: str) -> str:
     payload = {
         "iss": settings.jwt_issuer,

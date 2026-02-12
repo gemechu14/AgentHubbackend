@@ -42,3 +42,4 @@ class Agent(Base):
     account = relationship("Account", backref="agents")
     creator = relationship("User", backref="created_agents")
 
+

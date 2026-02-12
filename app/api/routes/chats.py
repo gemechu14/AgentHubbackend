@@ -19,6 +19,7 @@ from app.schemas.chat import (
     ChatListOut,
     ChatMessageOut,
     MessageCreate,
+    MessageUpdate,
     MessageResponse,
 )
 from app.schemas.agent import PowerBIConfig
@@ -454,4 +455,83 @@ def send_message(
             message=ChatMessageOut.model_validate(error_message),
             chat=ChatOut.model_validate(chat),
         )
+
+
+@router.patch(
+    "/{account_id}/{agent_id}/{chat_id}/messages/{message_id}",
+    response_model=ChatMessageOut,
+    summary="Update a message",
+    description="""
+    Update the content of a message in a chat.
+    
+    Currently, only user messages (questions) can be updated. 
+    Assistant messages cannot be edited.
+    
+    Note: Updating a user message does NOT automatically regenerate the assistant response.
+    You would need to delete the old assistant response and send a new message to get a new answer.
+    
+    Requires OWNER, ADMIN, MEMBER, or VIEWER role for the account.
+    """,
+)
+def update_message(
+    account_id: UUID,
+    agent_id: UUID,
+    chat_id: UUID,
+    message_id: UUID,
+    body: MessageUpdate,
+    tup = Depends(require_role_for_account({Role.OWNER, Role.ADMIN, Role.MEMBER, Role.VIEWER})),
+    db: Session = Depends(get_db),
+):
+    """Update a message in a chat."""
+    user, verified_account_id, _ = tup
+    
+    # Verify account_id matches
+    if verified_account_id != account_id:
+        raise HTTPException(status_code=403, detail="Account ID mismatch")
+    
+    # Verify agent exists and belongs to account
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.account_id == account_id
+    ).first()
+    
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Verify chat exists and belongs to account
+    chat = db.query(Chat).filter(
+        Chat.id == chat_id,
+        Chat.agent_id == agent_id,
+        Chat.account_id == account_id
+    ).first()
+    
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    
+    # Get message
+    message = db.query(ChatMessage).filter(
+        ChatMessage.id == message_id,
+        ChatMessage.chat_id == chat_id
+    ).first()
+    
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+    
+    # Only allow updating user messages (not assistant messages)
+    if message.role != "user":
+        raise HTTPException(
+            status_code=400,
+            detail="Only user messages can be updated. Assistant messages cannot be edited."
+        )
+    
+    # Update message content
+    message.content = body.content
+    
+    # Update chat updated_at
+    chat.updated_at = now_utc()
+    
+    db.commit()
+    db.refresh(message)
+    
+    return ChatMessageOut.model_validate(message)
 

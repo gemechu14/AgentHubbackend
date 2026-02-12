@@ -1,6 +1,7 @@
 # app/main.py
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 import atexit
 
 from app.core.config import settings
@@ -19,6 +20,8 @@ from app.api.routes.surveys import router as surveys_router
 from app.api.routes.survey_public import router as survey_public_router
 from app.api.routes.agents import router as agents_router
 from app.api.routes.chats import router as chats_router
+from app.api.routes.embed import router as embed_router
+from app.api.routes.agent_launch import router as agent_launch_router
 
 app = FastAPI(
     title=settings.app_name,
@@ -27,14 +30,27 @@ app = FastAPI(
     openapi_url="/gibberish-xyz-123/openapi.json"  # OpenAPI JSON path
 )
 
-# CORS (open for now; tighten to specific origins later)
+# CORS - Allow embedding from any origin for embed widget
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://app.smartschema.io", "https://www.app.smartschema.io", "http://localhost:3000","http://localhost:3001","https://smartschema.io", "https://www.smartschema.io"],              # e.g., ["http://localhost:3000", "https://your-frontend.com"]
+    allow_origins=["*"],  # Allow all origins for embed widget (can be restricted in production)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Security headers for iframe embedding
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    # Allow embedding in iframes from any origin
+    # Note: X-Frame-Options doesn't support ALLOWALL, so we remove it and use CSP instead
+    # In production, you may want to restrict frame-ancestors to specific domains
+    if "/embed/" in str(request.url.path):
+        # Only allow iframe embedding for embed routes
+        response.headers.pop("X-Frame-Options", None)  # Remove if set by default
+        response.headers["Content-Security-Policy"] = "frame-ancestors *"
+    return response
 
 # Routers
 app.include_router(auth_router)
@@ -51,6 +67,8 @@ app.include_router(surveys_router)
 app.include_router(survey_public_router)
 app.include_router(agents_router)
 app.include_router(chats_router)
+app.include_router(embed_router)
+app.include_router(agent_launch_router)
 
 # Start pipeline scheduler on app startup
 @app.on_event("startup")

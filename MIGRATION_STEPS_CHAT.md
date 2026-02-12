@@ -88,3 +88,4 @@ Both tables will have proper foreign keys, indexes, and cascade delete behavior.
 
 For more details, see `docs/migration-guide-chat.md`
 
+

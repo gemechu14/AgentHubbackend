@@ -262,7 +262,55 @@ const deleteChat = async (
 
 ---
 
-### 6. Send a Message (Most Important!)
+### 6. Update a Message
+
+**Endpoint:** `PATCH /chats/{account_id}/{agent_id}/{chat_id}/messages/{message_id}`
+
+**Description:** Update the content of a user message (question) in a chat.
+
+**Note:** Only user messages can be updated. Assistant messages cannot be edited. Updating a user message does NOT automatically regenerate the assistant response.
+
+**Request Body:**
+```typescript
+interface MessageUpdate {
+  content: string;  // Required, min length: 1
+}
+```
+
+**Response:** `ChatMessageOut`
+
+**Example Request:**
+```typescript
+const updateMessage = async (
+  accountId: string,
+  agentId: string,
+  chatId: string,
+  messageId: string,
+  newContent: string
+) => {
+  const response = await fetch(
+    `/chats/${accountId}/${agentId}/${chatId}/messages/${messageId}`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ content: newContent })
+    }
+  );
+  
+  if (!response.ok) {
+    throw new Error('Failed to update message');
+  }
+  
+  return await response.json();
+};
+```
+
+---
+
+### 7. Send a Message (Most Important!)
 
 **Endpoint:** `POST /chats/{account_id}/{agent_id}/{chat_id}/messages`
 

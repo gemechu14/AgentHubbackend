@@ -18,6 +18,10 @@ class MessageCreate(BaseModel):
     content: str = Field(..., min_length=1, description="Message content")
 
 
+class MessageUpdate(BaseModel):
+    content: str = Field(..., min_length=1, description="Updated message content")
+
+
 # Response schemas
 class ChatMessageOut(BaseModel):
     model_config: ConfigDict = ConfigDict(from_attributes=True)
