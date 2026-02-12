@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.api.deps_auth import current_user, require_role_for_account
-from app.models.auth_models import User, Account, Role
+from app.models.auth_models import User, Account, Role, Membership
 from app.models.agent import Agent, ConnectionType
 from app.schemas.agent import (
     AgentCreate,
@@ -245,7 +245,7 @@ def list_agents(
     db: Session = Depends(get_db),
 ):
     """List all agents for an account."""
-    user, verified_account_id, _ = tup
+    user, verified_account_id, caller_role = tup
     
     # Verify account_id matches
     if verified_account_id != account_id:
@@ -253,6 +253,22 @@ def list_agents(
     
     # Query agents
     query = db.query(Agent).filter(Agent.account_id == account_id)
+    
+    # Filter by manage_agent_ids for MEMBER/VIEWER roles
+    # OWNER/ADMIN see all agents regardless of manage_agent_ids
+    if caller_role in (Role.MEMBER, Role.VIEWER):
+        # Get user's membership to check manage_agent_ids
+        membership = db.query(Membership).filter(
+            Membership.account_id == account_id,
+            Membership.user_id == user.id
+        ).first()
+        
+        if membership and membership.manage_agent_ids:
+            # Filter to only show assigned agents
+            agent_ids = [UUID(str(aid)) for aid in membership.manage_agent_ids]
+            query = query.filter(Agent.id.in_(agent_ids))
+        # If manage_agent_ids is None or empty, show all agents (backward compatibility)
+    
     total = query.count()
     agents = query.order_by(Agent.created_at.desc()).offset(skip).limit(limit).all()
     
@@ -276,7 +292,7 @@ def get_agent(
     db: Session = Depends(get_db),
 ):
     """Get a specific agent."""
-    user, verified_account_id, _ = tup
+    user, verified_account_id, caller_role = tup
     
     # Verify account_id matches
     if verified_account_id != account_id:
@@ -289,6 +305,24 @@ def get_agent(
     
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Check access for MEMBER/VIEWER roles
+    # OWNER/ADMIN can access any agent
+    if caller_role in (Role.MEMBER, Role.VIEWER):
+        membership = db.query(Membership).filter(
+            Membership.account_id == account_id,
+            Membership.user_id == user.id
+        ).first()
+        
+        if membership and membership.manage_agent_ids:
+            # Check if agent_id is in their assigned list
+            agent_ids = [str(UUID(str(aid))) for aid in membership.manage_agent_ids]
+            if str(agent_id) not in agent_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You do not have access to this agent"
+                )
+        # If manage_agent_ids is None or empty, allow access (backward compatibility)
     
     return agent
 

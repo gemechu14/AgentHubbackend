@@ -8,7 +8,7 @@ import os
 
 from app.api.deps import get_db
 from app.api.deps_auth import current_user, require_role_for_account
-from app.models.auth_models import User, Account, Role
+from app.models.auth_models import User, Account, Role, Membership
 from app.models.agent import Agent, ConnectionType
 from app.models.chat import Chat, ChatMessage
 from app.schemas.chat import (
@@ -27,6 +27,35 @@ from app.services.powerbi_chat import chat_with_powerbi
 from app.core.security import now_utc
 
 router = APIRouter(prefix="/chats", tags=["chats"])
+
+
+def check_agent_access(
+    db: Session,
+    user_id: UUID,
+    account_id: UUID,
+    agent_id: UUID,
+    caller_role: Role
+) -> None:
+    """Check if user has access to agent. Raises HTTPException if not."""
+    # OWNER/ADMIN can access any agent
+    if caller_role in (Role.OWNER, Role.ADMIN):
+        return
+    
+    # MEMBER/VIEWER: check manage_agent_ids
+    membership = db.query(Membership).filter(
+        Membership.account_id == account_id,
+        Membership.user_id == user_id
+    ).first()
+    
+    if membership and membership.manage_agent_ids:
+        # Check if agent_id is in their assigned list
+        agent_ids = [str(UUID(str(aid))) for aid in membership.manage_agent_ids]
+        if str(agent_id) not in agent_ids:
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have access to this agent"
+            )
+    # If manage_agent_ids is None or empty, allow access (backward compatibility)
 
 
 # ============================================================================
@@ -55,7 +84,7 @@ def create_chat(
     db: Session = Depends(get_db),
 ):
     """Create a new chat."""
-    user, verified_account_id, _ = tup
+    user, verified_account_id, caller_role = tup
     
     # Verify account_id matches
     if verified_account_id != account_id:
@@ -69,6 +98,9 @@ def create_chat(
     
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Check agent access
+    check_agent_access(db, user.id, account_id, agent_id, caller_role)
     
     # Create chat
     chat = Chat(
@@ -107,7 +139,7 @@ def list_chats(
     db: Session = Depends(get_db),
 ):
     """List all chats for an agent."""
-    user, verified_account_id, _ = tup
+    user, verified_account_id, caller_role = tup
     
     # Verify account_id matches
     if verified_account_id != account_id:
@@ -121,6 +153,9 @@ def list_chats(
     
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Check agent access
+    check_agent_access(db, user.id, account_id, agent_id, caller_role)
     
     # Query chats
     query = db.query(Chat).filter(
@@ -164,7 +199,7 @@ def get_chat(
     db: Session = Depends(get_db),
 ):
     """Get a specific chat with messages."""
-    user, verified_account_id, _ = tup
+    user, verified_account_id, caller_role = tup
     
     # Verify account_id matches
     if verified_account_id != account_id:
@@ -178,6 +213,9 @@ def get_chat(
     
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Check agent access
+    check_agent_access(db, user.id, account_id, agent_id, caller_role)
     
     # Get chat with messages
     chat = db.query(Chat).filter(
@@ -227,11 +265,14 @@ def update_chat(
     db: Session = Depends(get_db),
 ):
     """Update chat title."""
-    user, verified_account_id, _ = tup
+    user, verified_account_id, caller_role = tup
     
     # Verify account_id matches
     if verified_account_id != account_id:
         raise HTTPException(status_code=403, detail="Account ID mismatch")
+    
+    # Check agent access
+    check_agent_access(db, user.id, account_id, agent_id, caller_role)
     
     # Get chat
     chat = db.query(Chat).filter(
@@ -274,11 +315,14 @@ def delete_chat(
     db: Session = Depends(get_db),
 ):
     """Delete a chat."""
-    user, verified_account_id, _ = tup
+    user, verified_account_id, caller_role = tup
     
     # Verify account_id matches
     if verified_account_id != account_id:
         raise HTTPException(status_code=403, detail="Account ID mismatch")
+    
+    # Check agent access
+    check_agent_access(db, user.id, account_id, agent_id, caller_role)
     
     # Get chat
     chat = db.query(Chat).filter(
@@ -330,11 +374,14 @@ def send_message(
     db: Session = Depends(get_db),
 ):
     """Send a message in a chat and get AI response."""
-    user, verified_account_id, _ = tup
+    user, verified_account_id, caller_role = tup
     
     # Verify account_id matches
     if verified_account_id != account_id:
         raise HTTPException(status_code=403, detail="Account ID mismatch")
+    
+    # Check agent access
+    check_agent_access(db, user.id, account_id, agent_id, caller_role)
     
     # Get agent
     agent = db.query(Agent).filter(
@@ -487,11 +534,14 @@ def update_message(
     db: Session = Depends(get_db),
 ):
     """Update a message in a chat."""
-    user, verified_account_id, _ = tup
+    user, verified_account_id, caller_role = tup
     
     # Verify account_id matches
     if verified_account_id != account_id:
         raise HTTPException(status_code=403, detail="Account ID mismatch")
+    
+    # Check agent access
+    check_agent_access(db, user.id, account_id, agent_id, caller_role)
     
     # Verify agent exists and belongs to account
     agent = db.query(Agent).filter(
