@@ -479,6 +479,10 @@ async def embed_chat(
             dataset_id=config.dataset_id,
             client_secret=config.client_secret,
             openai_api_key=openai_api_key,
+            custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
+            custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
+            custom_tone_schema=agent.custom_tone_schema,
+            custom_tone_rows=agent.custom_tone_rows,
         )
         
         return {

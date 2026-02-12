@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum
 from uuid import uuid4
-from sqlalchemy import Column, String, DateTime, ForeignKey, Enum as SAEnum, Text
+from sqlalchemy import Column, String, DateTime, ForeignKey, Enum as SAEnum, Text, Boolean
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 
@@ -29,6 +29,12 @@ class Agent(Base):
     # For POWERBI: tenantID, ClientID, Workspace ID, Dataset ID, clientsecret
     # For DB: host, username, database, password, port, databasetype
     connection_config = Column(JSONB, nullable=False)
+    
+    # Custom tone settings for Power BI chat (per agent)
+    custom_tone_schema_enabled = Column(Boolean, nullable=False, default=False)
+    custom_tone_rows_enabled = Column(Boolean, nullable=False, default=False)
+    custom_tone_schema = Column(Text, nullable=True)  # Custom tone for schema-based answers
+    custom_tone_rows = Column(Text, nullable=True)  # Custom tone for row-based answers
     
     # Foreign keys
     account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)

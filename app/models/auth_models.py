@@ -51,6 +51,7 @@ class Membership(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     role = Column(SAEnum(Role), nullable=False, default=Role.MEMBER)
     manage_schema_ids = Column(JSONB, nullable=True)
+    manage_agent_ids = Column(JSONB, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     account = relationship("Account", back_populates="members")
@@ -68,6 +69,7 @@ class Invitation(Base):
     expires_at = Column(DateTime, nullable=False)
     accepted_at = Column(DateTime, nullable=True)
     manage_schema_ids = Column(JSONB, nullable=True)
+    manage_agent_ids = Column(JSONB, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 class RefreshToken(Base):

@@ -199,17 +199,20 @@ def signup(body: SignupBody, db: Session = Depends(get_db)):
     else:
         db.add(Membership(account_id=account_id, user_id=user.id, role=role))
 
-    # If this signup used an invite that included per-schema permissions, ensure
+    # If this signup used an invite that included per-schema or per-agent permissions, ensure
     # those are applied to the created membership. Flush/refresh to ensure the
     # membership row exists and is attached before assigning the JSON list.
-    if body.invite and inv and inv.manage_schema_ids:
+    if body.invite and inv:
         db.flush()
         mem = db.query(Membership).filter(
             Membership.account_id == account_id,
             Membership.user_id == user.id
         ).first()
         if mem and mem.role in {Role.MEMBER, Role.VIEWER}:
-            mem.manage_schema_ids = inv.manage_schema_ids
+            if inv.manage_schema_ids:
+                mem.manage_schema_ids = inv.manage_schema_ids
+            if inv.manage_agent_ids:
+                mem.manage_agent_ids = inv.manage_agent_ids
     # Send verification
     try:
         issue_email_verification(db, user.id, email, first_name)

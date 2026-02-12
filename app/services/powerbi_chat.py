@@ -81,6 +81,7 @@ Hard rules (must follow):
 9) For text matching or "I don't remember exact name":
    - Use CONTAINSSTRING( LOWER( 'Table'[TextCol] ), LOWER("value") ) where appropriate.
 
+
 Schema:
 {schema}
 
@@ -125,25 +126,9 @@ DAX Query:"""
 )
 
 ANSWER_FROM_SCHEMA_PROMPT = ChatPromptTemplate.from_template(
-    """You are a helpful, friendly data assistant.
+    """
+{tone}
 
-Style:
-- Conversational
-- Brief and precise
-- Human-friendly naming
-
-Important presentation rules:
-- When listing tables for a user:
-  - EXCLUDE system or auto-generated date tables unless the user explicitly asks for them.
-  - Examples of system tables include tables used only for internal date handling
-    (often with long generated names).
-  - Prefer business-facing tables (facts, dimensions, entities).
-- If the user explicitly asks for "all tables" or "including system tables",
-  then include everything.
-
-Grounding:
-- Use ONLY what exists in the schema snapshot.
-- Do NOT invent tables.
 
 Schema:
 {schema}
@@ -155,16 +140,8 @@ Answer:"""
 )
 
 ANSWER_FROM_ROWS_PROMPT = ChatPromptTemplate.from_template(
-    """You are a helpful, friendly data assistant.
-
-Style:
-- Conversational
-- Brief and precise
-- Prefer short bullets when listing
-
-Grounding:
-- Do NOT invent values.
-- Only use what appears in the response rows.
+    """
+{tone}
 
 Question:
 {question}
@@ -509,11 +486,28 @@ def chat_with_powerbi(
     dataset_id: str,
     client_secret: str,
     openai_api_key: str,
+    custom_tone_schema_enabled: bool = False,
+    custom_tone_rows_enabled: bool = False,
+    custom_tone_schema: Optional[str] = None,
+    custom_tone_rows: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Main chat function - processes a question about Power BI data.
     
     Schema is automatically cached in memory per workspace+dataset combination.
+    
+    Args:
+        question: User's question about the Power BI data
+        tenant_id: Azure AD tenant ID
+        client_id: Azure AD client ID
+        workspace_id: Power BI workspace ID
+        dataset_id: Power BI dataset ID
+        client_secret: Azure AD client secret
+        openai_api_key: OpenAI API key
+        custom_tone_schema_enabled: If True, use custom_tone_schema for ANSWER_FROM_SCHEMA_PROMPT
+        custom_tone_rows_enabled: If True, use custom_tone_rows for ANSWER_FROM_ROWS_PROMPT
+        custom_tone_schema: Custom tone/style text for schema-based answers (when enabled)
+        custom_tone_rows: Custom tone/style text for row-based answers (when enabled)
     
     Returns:
         {
@@ -583,7 +577,35 @@ def chat_with_powerbi(
 
     # DESCRIBE (no DAX execution)
     if action == "DESCRIBE" or not action:
-        answer = (ANSWER_FROM_SCHEMA_PROMPT | llm).invoke({"schema": schema_cache, "question": question})
+        # Determine tone for schema prompt
+        schema_tone = (
+            custom_tone_schema.strip()
+            if custom_tone_schema_enabled and custom_tone_schema
+            else """You are a helpful, friendly data assistant.
+
+Style:
+- Conversational
+- Brief and precise
+- Human-friendly naming
+
+Important presentation rules:
+- When listing tables for a user:
+  - EXCLUDE system or auto-generated date tables unless the user explicitly asks for them.
+  - Examples of system tables include tables used only for internal date handling
+    (often with long generated names).
+  - Prefer business-facing tables (facts, dimensions, entities).
+- If the user explicitly asks for "all tables" or "including system tables",
+  then include everything.
+
+Grounding:
+- Use ONLY what exists in the schema snapshot.
+- Do NOT invent tables."""
+        )
+        answer = (ANSWER_FROM_SCHEMA_PROMPT | llm).invoke({
+            "schema": schema_cache,
+            "question": question,
+            "tone": schema_tone
+        })
         return {
             "answer": answer.content.strip(),
             "resolution_note": resolution_note,
@@ -610,9 +632,27 @@ def chat_with_powerbi(
             max_retries=2,
         )
 
-        answer = (ANSWER_FROM_ROWS_PROMPT | llm).invoke(
-            {"question": question, "final_dax": final_dax or "(no DAX executed)", "response": response_text}
+        # Determine tone for rows prompt
+        rows_tone = (
+            custom_tone_rows.strip()
+            if custom_tone_rows_enabled and custom_tone_rows
+            else """You are a helpful, friendly data assistant.
+
+Style:
+- Conversational
+- Brief and precise
+- Prefer short bullets when listing
+
+Grounding:
+- Do NOT invent values.
+- Only use what appears in the response rows."""
         )
+        answer = (ANSWER_FROM_ROWS_PROMPT | llm).invoke({
+            "question": question,
+            "final_dax": final_dax or "(no DAX executed)",
+            "response": response_text,
+            "tone": rows_tone
+        })
 
         return {
             "answer": answer.content.strip(),
@@ -624,7 +664,35 @@ def chat_with_powerbi(
         }
 
     # Fallback: unexpected planner output -> describe
-    answer = (ANSWER_FROM_SCHEMA_PROMPT | llm).invoke({"schema": schema_cache, "question": question})
+    # Determine tone for schema prompt
+    schema_tone = (
+        custom_tone_schema.strip()
+        if custom_tone_schema_enabled and custom_tone_schema
+        else """You are a helpful, friendly data assistant.
+
+Style:
+- Conversational
+- Brief and precise
+- Human-friendly naming
+
+Important presentation rules:
+- When listing tables for a user:
+  - EXCLUDE system or auto-generated date tables unless the user explicitly asks for them.
+  - Examples of system tables include tables used only for internal date handling
+    (often with long generated names).
+  - Prefer business-facing tables (facts, dimensions, entities).
+- If the user explicitly asks for "all tables" or "including system tables",
+  then include everything.
+
+Grounding:
+- Use ONLY what exists in the schema snapshot.
+- Do NOT invent tables."""
+    )
+    answer = (ANSWER_FROM_SCHEMA_PROMPT | llm).invoke({
+        "schema": schema_cache,
+        "question": question,
+        "tone": schema_tone
+    })
     return {
         "answer": answer.content.strip(),
         "resolution_note": resolution_note,

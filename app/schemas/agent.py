@@ -41,6 +41,12 @@ class AgentCreate(BaseModel):
     
     # Connection config - can be either PowerBI or DB config
     connection_config: Dict[str, Any] = Field(..., description="Connection configuration based on connection_type")
+    
+    # Custom tone settings for Power BI chat (only for POWERBI agents)
+    custom_tone_schema_enabled: Optional[bool] = Field(default=False, description="Enable custom tone for schema-based answers")
+    custom_tone_rows_enabled: Optional[bool] = Field(default=False, description="Enable custom tone for row-based answers")
+    custom_tone_schema: Optional[str] = Field(None, description="Custom tone text for schema-based answers")
+    custom_tone_rows: Optional[str] = Field(None, description="Custom tone text for row-based answers")
 
 
 class AgentUpdate(BaseModel):
@@ -52,6 +58,12 @@ class AgentUpdate(BaseModel):
     system_instructions: Optional[str] = Field(None, description="System instructions")
     connection_type: Optional[ConnectionTypeEnum] = Field(None, description="Connection type")
     connection_config: Optional[Dict[str, Any]] = Field(None, description="Connection configuration")
+    
+    # Custom tone settings for Power BI chat (only for POWERBI agents)
+    custom_tone_schema_enabled: Optional[bool] = Field(None, description="Enable custom tone for schema-based answers")
+    custom_tone_rows_enabled: Optional[bool] = Field(None, description="Enable custom tone for row-based answers")
+    custom_tone_schema: Optional[str] = Field(None, description="Custom tone text for schema-based answers")
+    custom_tone_rows: Optional[str] = Field(None, description="Custom tone text for row-based answers")
 
 
 # Response schemas
@@ -71,6 +83,12 @@ class AgentOut(BaseModel):
     created_by: Optional[UUID]
     created_at: datetime
     updated_at: Optional[datetime]
+    
+    # Custom tone settings for Power BI chat
+    custom_tone_schema_enabled: bool
+    custom_tone_rows_enabled: bool
+    custom_tone_schema: Optional[str]
+    custom_tone_rows: Optional[str]
 
 
 class AgentListOut(BaseModel):

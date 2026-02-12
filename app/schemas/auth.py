@@ -98,6 +98,10 @@ class InviteMemberBody(BaseModel):
         default=None,
         description="Optional list of schema IDs within this account the member may manage (admins/owners ignore)."
     )
+    manage_agent_ids: Optional[List[UUID]] = Field(
+        default=None,
+        description="Optional list of agent IDs within this account the member may manage (admins/owners ignore)."
+    )
 
 class MemberUpdatePermissions(BaseModel):
     user_id: Optional[UUID] = Field(
@@ -116,12 +120,17 @@ class MemberUpdatePermissions(BaseModel):
         default=None,
         description="Replace allowed schemas list for this member. Set [] to clear."
     )
+    manage_agent_ids: Optional[List[UUID]] = Field(
+        default=None,
+        description="Replace allowed agents list for this member. Set [] to clear."
+    )
 
 class TeamMemberOut(BaseModel):
     user_id: Optional[UUID] = None
     email: EmailStr
     role: str
     schema_access: List[UUID] = []
+    agent_access: List[UUID] = []
     status: str = Field(..., description="One of: active, inactive, pending, expired")
 
 class SchemaCreate(BaseModel):

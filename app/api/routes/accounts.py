@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.security import random_token, sha256, now_utc
 from app.models.auth_models import Account, Membership, Role, User, Invitation
 from app.models.schema_spec import SchemaSpecification
+from app.models.agent import Agent
 from app.models.verification import EmailVerification
 from app.models.password_reset import PasswordReset
 from app.models.auth_models import RefreshToken
@@ -77,6 +78,7 @@ def team_members(
             "email": u.email,
             "role": m.role.value.lower(),
             "schema_access": m.manage_schema_ids or [],
+            "agent_access": m.manage_agent_ids or [],
             "status": "active" if u.is_active else "inactive",
         }
         for (m, u) in rows
@@ -107,6 +109,7 @@ def team_members(
             "email": inv.email,
             "role": inv.role.value.lower(),
             "schema_access": inv.manage_schema_ids or [],
+            "agent_access": inv.manage_agent_ids or [],
             "status": status,
         })
 
@@ -296,6 +299,32 @@ def invite_member(
     seen = set()
     normalized_unique = [sid for sid in normalized if not (sid in seen or seen.add(sid))]
 
+    # --- normalize and validate manage_agent_ids (List[UUID] -> List[str]) ---
+    raw_agent_ids = body.manage_agent_ids or []
+    normalized_agents: list[str] = []
+    for x in raw_agent_ids:
+        try:
+            normalized_agents.append(str(UUID(str(x))))
+        except Exception:
+            raise HTTPException(400, detail=f"Invalid agent id: {x}")
+
+    # ensure agents belong to this account (prevents cross-tenant leakage)
+    if normalized_agents:
+        existing_agents = {
+            str(r[0])
+            for r in db.query(Agent.id)
+                       .filter(Agent.account_id == account_id,
+                               Agent.id.in_(normalized_agents))
+                       .all()
+        }
+        missing_agents = [aid for aid in normalized_agents if aid not in existing_agents]
+        if missing_agents:
+            raise HTTPException(400, detail=f"Agent ids not in this account: {missing_agents}")
+
+    # dedupe while preserving order
+    seen_agents = set()
+    normalized_agents_unique = [aid for aid in normalized_agents if not (aid in seen_agents or seen_agents.add(aid))]
+
     # Prevent inviting someone who's already an active member or already has a pending invite
     email_norm = str(body.email).lower().strip()
     existing_member = (
@@ -324,6 +353,7 @@ def invite_member(
         token_hash=sha256(raw),
         expires_at=now_utc() + timedelta(days=settings.invite_exp_days),
         manage_schema_ids=normalized_unique or None,  # <- JSON-serializable
+        manage_agent_ids=normalized_agents_unique or None,  # <- JSON-serializable
     )
     db.add(inv)
     db.commit()
@@ -469,9 +499,10 @@ def update_member_permissions_by_body(
                 # apply role (convert string -> Role)
                 try:
                     mem.role = Role(role_str)
-                    # If promoted to ADMIN/OWNER, clear per-schema manage list
+                    # If promoted to ADMIN/OWNER, clear per-schema and per-agent manage lists
                     if mem.role in (Role.ADMIN, Role.OWNER):
                         mem.manage_schema_ids = None
+                        mem.manage_agent_ids = None
                         # Also clear any pending invites for this user in this account
                         try:
                             # fetch user's email if membership has user_id
@@ -481,6 +512,7 @@ def update_member_permissions_by_body(
                                     invites = db.query(Invitation).filter(Invitation.account_id == account_id, Invitation.email == u.email).all()
                                     for inv in invites:
                                         inv.manage_schema_ids = None
+                                        inv.manage_agent_ids = None
                         except Exception:
                             # best-effort: don't fail the role change if invite cleanup fails
                             pass
@@ -519,6 +551,38 @@ def update_member_permissions_by_body(
                     # For ADMIN/OWNER, clear per-schema manage list
                     mem.manage_schema_ids = None
 
+            # Only process manage_agent_ids when the field was provided in the request
+            if body.manage_agent_ids is not None:
+                raw_agent_ids = body.manage_agent_ids
+                normalized_agents: list[str] = []
+                for x in raw_agent_ids:
+                    try:
+                        normalized_agents.append(str(UUID(str(x))))
+                    except Exception:
+                        raise HTTPException(400, detail=f"Invalid agent id: {x}")
+
+                if normalized_agents:
+                    existing_agents = {
+                        str(r[0])
+                        for r in db.query(Agent.id)
+                                  .filter(Agent.account_id == account_id,
+                                          Agent.id.in_(normalized_agents))
+                                  .all()
+                    }
+                    missing_agents = [aid for aid in normalized_agents if aid not in existing_agents]
+                    if missing_agents:
+                        raise HTTPException(400, detail=f"Agent ids not in this account: {missing_agents}")
+
+                seen_agents = set()
+                normalized_agents_unique = [aid for aid in normalized_agents if not (aid in seen_agents or seen_agents.add(aid))]
+
+                # Only assign per-agent manage list to MEMBER or VIEWER roles.
+                if mem.role in (Role.MEMBER, getattr(Role, 'VIEWER', None)):
+                    mem.manage_agent_ids = normalized_agents_unique or None
+                else:
+                    # For ADMIN/OWNER, clear per-agent manage list
+                    mem.manage_agent_ids = None
+
             db.commit()
             return {"ok": True, "message": "Permissions updated"}
 
@@ -541,43 +605,78 @@ def update_member_permissions_by_body(
             role_str = body.role.value if hasattr(body.role, 'value') else str(body.role)
             if role_str == Role.OWNER.value:
                 raise HTTPException(status_code=403, detail="Promoting to OWNER is not allowed via this API")
-            # Apply role to invites and clear per-schema list if promoted to ADMIN/OWNER
+            # Apply role to invites and clear per-schema and per-agent lists if promoted to ADMIN/OWNER
             for inv in invite_targets:
                 try:
                     inv.role = Role(role_str)
                     if role_str in (Role.ADMIN.value, Role.OWNER.value):
                         inv.manage_schema_ids = None
+                        inv.manage_agent_ids = None
                 except Exception:
                     pass
 
-        raw_ids = body.manage_schema_ids or []
-        normalized: list[str] = []
-        for x in raw_ids:
-            try:
-                normalized.append(str(UUID(str(x))))
-            except Exception:
-                raise HTTPException(400, detail=f"Invalid schema id: {x}")
+        # Handle manage_schema_ids for invites
+        if body.manage_schema_ids is not None:
+            raw_ids = body.manage_schema_ids
+            normalized: list[str] = []
+            for x in raw_ids:
+                try:
+                    normalized.append(str(UUID(str(x))))
+                except Exception:
+                    raise HTTPException(400, detail=f"Invalid schema id: {x}")
 
-        if normalized:
-            existing = {
-                str(r[0])
-                for r in db.query(SchemaSpecification.id)
-                          .filter(SchemaSpecification.account_id == account_id,
-                                  SchemaSpecification.id.in_(normalized))
-                          .all()
-            }
-            missing = [sid for sid in normalized if sid not in existing]
-            if missing:
-                raise HTTPException(400, detail=f"Schema ids not in this account: {missing}")
+            if normalized:
+                existing = {
+                    str(r[0])
+                    for r in db.query(SchemaSpecification.id)
+                              .filter(SchemaSpecification.account_id == account_id,
+                                      SchemaSpecification.id.in_(normalized))
+                              .all()
+                }
+                missing = [sid for sid in normalized if sid not in existing]
+                if missing:
+                    raise HTTPException(400, detail=f"Schema ids not in this account: {missing}")
 
-        seen = set()
-        normalized_unique = [sid for sid in normalized if not (sid in seen or seen.add(sid))]
-        for inv in invite_targets:
-            # If role was set to ADMIN/OWNER above, ensure we don't apply per-schema ids
-            if role_str and role_str in (Role.ADMIN.value, Role.OWNER.value):
-                inv.manage_schema_ids = None
-            else:
-                inv.manage_schema_ids = normalized_unique or None
+            seen = set()
+            normalized_unique = [sid for sid in normalized if not (sid in seen or seen.add(sid))]
+            for inv in invite_targets:
+                # If role was set to ADMIN/OWNER above, ensure we don't apply per-schema ids
+                if role_str and role_str in (Role.ADMIN.value, Role.OWNER.value):
+                    inv.manage_schema_ids = None
+                else:
+                    inv.manage_schema_ids = normalized_unique or None
+
+        # Handle manage_agent_ids for invites
+        if body.manage_agent_ids is not None:
+            raw_agent_ids = body.manage_agent_ids
+            normalized_agents: list[str] = []
+            for x in raw_agent_ids:
+                try:
+                    normalized_agents.append(str(UUID(str(x))))
+                except Exception:
+                    raise HTTPException(400, detail=f"Invalid agent id: {x}")
+
+            if normalized_agents:
+                existing_agents = {
+                    str(r[0])
+                    for r in db.query(Agent.id)
+                              .filter(Agent.account_id == account_id,
+                                      Agent.id.in_(normalized_agents))
+                              .all()
+                }
+                missing_agents = [aid for aid in normalized_agents if aid not in existing_agents]
+                if missing_agents:
+                    raise HTTPException(400, detail=f"Agent ids not in this account: {missing_agents}")
+
+            seen_agents = set()
+            normalized_agents_unique = [aid for aid in normalized_agents if not (aid in seen_agents or seen_agents.add(aid))]
+            for inv in invite_targets:
+                # If role was set to ADMIN/OWNER above, ensure we don't apply per-agent ids
+                if role_str and role_str in (Role.ADMIN.value, Role.OWNER.value):
+                    inv.manage_agent_ids = None
+                else:
+                    inv.manage_agent_ids = normalized_agents_unique or None
+
         db.commit()
         return {"ok": True, "message": "Invite(s) updated", "count": len(invite_targets)}
 
@@ -611,15 +710,17 @@ def update_member_permissions_by_body(
                             raise HTTPException(400, "Cannot demote the last OWNER")
                     try:
                         mem.role = Role(role_str)
-                        # If promoted to ADMIN/OWNER, clear per-schema manage list
+                        # If promoted to ADMIN/OWNER, clear per-schema and per-agent manage lists
                         if mem.role in (Role.ADMIN, Role.OWNER):
                             mem.manage_schema_ids = None
+                            mem.manage_agent_ids = None
                             # Also clear pending invites matching this user's email
                             try:
                                 if user:
                                     invites = db.query(Invitation).filter(Invitation.account_id == account_id, Invitation.email == user.email).all()
                                     for inv in invites:
                                         inv.manage_schema_ids = None
+                                        inv.manage_agent_ids = None
                             except Exception:
                                 pass
                     except Exception:
@@ -655,6 +756,36 @@ def update_member_permissions_by_body(
                     else:
                         mem.manage_schema_ids = None
 
+                # manage_agent_ids only if provided
+                if body.manage_agent_ids is not None:
+                    raw_agent_ids = body.manage_agent_ids
+                    normalized_agents: list[str] = []
+                    for x in raw_agent_ids:
+                        try:
+                            normalized_agents.append(str(UUID(str(x))))
+                        except Exception:
+                            raise HTTPException(400, detail=f"Invalid agent id: {x}")
+
+                    if normalized_agents:
+                        existing_agents = {
+                            str(r[0])
+                            for r in db.query(Agent.id)
+                                      .filter(Agent.account_id == account_id,
+                                              Agent.id.in_(normalized_agents))
+                                      .all()
+                        }
+                        missing_agents = [aid for aid in normalized_agents if aid not in existing_agents]
+                        if missing_agents:
+                            raise HTTPException(400, detail=f"Agent ids not in this account: {missing_agents}")
+
+                    seen_agents = set()
+                    normalized_agents_unique = [aid for aid in normalized_agents if not (aid in seen_agents or seen_agents.add(aid))]
+
+                    if mem.role in (Role.MEMBER, getattr(Role, 'VIEWER', None)):
+                        mem.manage_agent_ids = normalized_agents_unique or None
+                    else:
+                        mem.manage_agent_ids = None
+
                 db.commit()
                 return {"ok": True, "message": "Membership updated by email"}
 
@@ -678,6 +809,7 @@ def update_member_permissions_by_body(
                     inv.role = Role(role_str)
                     if role_str in (Role.ADMIN.value, Role.OWNER.value):
                         inv.manage_schema_ids = None
+                        inv.manage_agent_ids = None
                 except Exception:
                     pass
 
@@ -710,6 +842,37 @@ def update_member_permissions_by_body(
                     inv.manage_schema_ids = None
                 else:
                     inv.manage_schema_ids = normalized_unique or None
+
+        # manage_agent_ids for invites only if provided
+        if body.manage_agent_ids is not None:
+            raw_agent_ids = body.manage_agent_ids
+            normalized_agents: list[str] = []
+            for x in raw_agent_ids:
+                try:
+                    normalized_agents.append(str(UUID(str(x))))
+                except Exception:
+                    raise HTTPException(400, detail=f"Invalid agent id: {x}")
+
+            if normalized_agents:
+                existing_agents = {
+                    str(r[0])
+                    for r in db.query(Agent.id)
+                              .filter(Agent.account_id == account_id,
+                                      Agent.id.in_(normalized_agents))
+                              .all()
+                }
+                missing_agents = [aid for aid in normalized_agents if aid not in existing_agents]
+                if missing_agents:
+                    raise HTTPException(400, detail=f"Agent ids not in this account: {missing_agents}")
+
+            seen_agents = set()
+            normalized_agents_unique = [aid for aid in normalized_agents if not (aid in seen_agents or seen_agents.add(aid))]
+            for inv in invite_targets:
+                if role_str and role_str in (Role.ADMIN.value, Role.OWNER.value):
+                    inv.manage_agent_ids = None
+                else:
+                    inv.manage_agent_ids = normalized_agents_unique or None
+
         db.commit()
         return {"ok": True, "message": "Invite(s) updated by email", "count": len(invite_targets)}
 

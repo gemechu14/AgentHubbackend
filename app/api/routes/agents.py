@@ -213,6 +213,10 @@ def create_agent(
         connection_config=validated_config,
         account_id=account_id,
         created_by=user.id,
+        custom_tone_schema_enabled=body.custom_tone_schema_enabled or False,
+        custom_tone_rows_enabled=body.custom_tone_rows_enabled or False,
+        custom_tone_schema=body.custom_tone_schema,
+        custom_tone_rows=body.custom_tone_rows,
     )
     
     db.add(agent)
@@ -634,6 +638,10 @@ def chat_with_agent(
             dataset_id=config.dataset_id,
             client_secret=config.client_secret,
             openai_api_key=openai_api_key,
+            custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
+            custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
+            custom_tone_schema=agent.custom_tone_schema,
+            custom_tone_rows=agent.custom_tone_rows,
         )
         return PowerBIChatResponse(**result)
     except Exception as e:
