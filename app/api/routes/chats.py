@@ -157,10 +157,11 @@ def list_chats(
     # Check agent access
     check_agent_access(db, user.id, account_id, agent_id, caller_role)
     
-    # Query chats
+    # Query chats - filter by user_id so users only see their own chats
     query = db.query(Chat).filter(
         Chat.agent_id == agent_id,
-        Chat.account_id == account_id
+        Chat.account_id == account_id,
+        Chat.user_id == user.id  # Only show chats created by the current user
     )
     
     total = query.count()
@@ -217,11 +218,12 @@ def get_chat(
     # Check agent access
     check_agent_access(db, user.id, account_id, agent_id, caller_role)
     
-    # Get chat with messages
+    # Get chat with messages - ensure user can only access their own chats
     chat = db.query(Chat).filter(
         Chat.id == chat_id,
         Chat.agent_id == agent_id,
-        Chat.account_id == account_id
+        Chat.account_id == account_id,
+        Chat.user_id == user.id  # Only allow access to own chats
     ).first()
     
     if not chat:
@@ -274,11 +276,12 @@ def update_chat(
     # Check agent access
     check_agent_access(db, user.id, account_id, agent_id, caller_role)
     
-    # Get chat
+    # Get chat - ensure user can only access their own chats
     chat = db.query(Chat).filter(
         Chat.id == chat_id,
         Chat.agent_id == agent_id,
-        Chat.account_id == account_id
+        Chat.account_id == account_id,
+        Chat.user_id == user.id  # Only allow access to own chats
     ).first()
     
     if not chat:
@@ -324,11 +327,12 @@ def delete_chat(
     # Check agent access
     check_agent_access(db, user.id, account_id, agent_id, caller_role)
     
-    # Get chat
+    # Get chat - ensure user can only access their own chats
     chat = db.query(Chat).filter(
         Chat.id == chat_id,
         Chat.agent_id == agent_id,
-        Chat.account_id == account_id
+        Chat.account_id == account_id,
+        Chat.user_id == user.id  # Only allow access to own chats
     ).first()
     
     if not chat:
@@ -399,11 +403,12 @@ def send_message(
             detail=f"Chat messages only supported for POWERBI agents. This agent has type: {agent.connection_type.value}"
         )
     
-    # Get chat
+    # Get chat - ensure user can only access their own chats
     chat = db.query(Chat).filter(
         Chat.id == chat_id,
         Chat.agent_id == agent_id,
-        Chat.account_id == account_id
+        Chat.account_id == account_id,
+        Chat.user_id == user.id  # Only allow access to own chats
     ).first()
     
     if not chat:
@@ -552,11 +557,12 @@ def update_message(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     
-    # Verify chat exists and belongs to account
+    # Verify chat exists and belongs to account - ensure user can only access their own chats
     chat = db.query(Chat).filter(
         Chat.id == chat_id,
         Chat.agent_id == agent_id,
-        Chat.account_id == account_id
+        Chat.account_id == account_id,
+        Chat.user_id == user.id  # Only allow access to own chats
     ).first()
     
     if not chat:
