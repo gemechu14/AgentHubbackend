@@ -55,13 +55,6 @@ async def launch_agent_widget(
             detail=f"Agent is not active. Current status: {agent.status}"
         )
     
-    # Verify agent type is POWERBI
-    if agent.connection_type != ConnectionType.POWERBI:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Chat only supported for POWERBI agents. This agent has type: {agent.connection_type.value}"
-        )
-    
     # Check if credential exists, create if missing
     credential = db.query(AgentCredential).filter(
         AgentCredential.agent_id == agent_uuid

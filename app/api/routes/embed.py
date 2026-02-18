@@ -7,8 +7,9 @@ from pydantic import BaseModel
 
 from app.api.deps import get_db
 from app.models.agent import Agent, ConnectionType
-from app.schemas.agent import PowerBIConfig
+from app.schemas.agent import PowerBIConfig, DBConfig
 from app.services.powerbi_chat import chat_with_powerbi
+from app.services.db_chat import chat_with_db
 import os
 
 router = APIRouter(prefix="/embed", tags=["embed"])
@@ -437,27 +438,11 @@ async def embed_chat(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     
-    # Only support POWERBI connection type
-    if agent.connection_type != ConnectionType.POWERBI:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Chat only supported for POWERBI agents. This agent has type: {agent.connection_type.value}"
-        )
-    
     # Check if agent is active
     if agent.status != "active":
         raise HTTPException(
             status_code=400,
             detail=f"Agent is not active. Current status: {agent.status}"
-        )
-    
-    # Extract Power BI config
-    try:
-        config = PowerBIConfig(**agent.connection_config)
-    except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid Power BI configuration: {str(e)}"
         )
     
     # Get OpenAI API key from agent's api_key field or environment
@@ -469,31 +454,85 @@ async def embed_chat(
             detail="OpenAI API key is required. Set it in the agent's api_key field or OPENAI_API_KEY environment variable."
         )
     
-    # Chat with Power BI (non-persistent - no database storage)
+    # Route to appropriate chat service based on connection type
     try:
-        result = chat_with_powerbi(
-            question=body.question,
-            tenant_id=config.tenant_id,
-            client_id=config.client_id,
-            workspace_id=config.workspace_id,
-            dataset_id=config.dataset_id,
-            client_secret=config.client_secret,
-            openai_api_key=openai_api_key,
-            custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
-            custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
-            custom_tone_schema=agent.custom_tone_schema,
-            custom_tone_rows=agent.custom_tone_rows,
-        )
+        if agent.connection_type == ConnectionType.POWERBI:
+            # Extract Power BI config
+            try:
+                config = PowerBIConfig(**agent.connection_config)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid Power BI configuration: {str(e)}"
+                )
+            
+            # Chat with Power BI (non-persistent - no database storage)
+            result = chat_with_powerbi(
+                question=body.question,
+                tenant_id=config.tenant_id,
+                client_id=config.client_id,
+                workspace_id=config.workspace_id,
+                dataset_id=config.dataset_id,
+                client_secret=config.client_secret,
+                openai_api_key=openai_api_key,
+                custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
+                custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
+                custom_tone_schema=agent.custom_tone_schema,
+                custom_tone_rows=agent.custom_tone_rows,
+            )
+            
+            return {
+                "answer": result.get("answer", ""),
+                "resolution_note": result.get("resolution_note", ""),
+                "action": result.get("action", "DESCRIBE"),
+                "dax_attempts": result.get("dax_attempts", []),
+                "final_dax": result.get("final_dax", ""),
+                "error": result.get("error"),
+            }
         
-        return {
-            "answer": result.get("answer", ""),
-            "resolution_note": result.get("resolution_note", ""),
-            "action": result.get("action", "DESCRIBE"),
-            "dax_attempts": result.get("dax_attempts", []),
-            "final_dax": result.get("final_dax", ""),
-            "error": result.get("error"),
-        }
+        elif agent.connection_type == ConnectionType.DB:
+            # Extract DB config
+            try:
+                config = DBConfig(**agent.connection_config)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid DB configuration: {str(e)}"
+                )
+            
+            # Chat with DB (non-persistent - no database storage)
+            result = chat_with_db(
+                question=body.question,
+                database_type=config.database_type,
+                host=config.host,
+                port=config.port,
+                database=config.database,
+                username=config.username,
+                password=config.password,
+                openai_api_key=openai_api_key,
+                custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
+                custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
+                custom_tone_schema=agent.custom_tone_schema,
+                custom_tone_rows=agent.custom_tone_rows,
+            )
+            
+            return {
+                "answer": result.get("answer", ""),
+                "resolution_note": result.get("resolution_note", ""),
+                "action": result.get("action", "DESCRIBE"),
+                "dax_attempts": result.get("sql_attempts", []),  # Map SQL to DAX field for compatibility
+                "final_dax": result.get("final_sql", ""),  # Map SQL to DAX field for compatibility
+                "error": result.get("error"),
+            }
         
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Chat not supported for connection type: {agent.connection_type.value}"
+            )
+        
+    except HTTPException:
+        raise
     except Exception as e:
         return {
             "answer": f"An error occurred while processing your question: {str(e)}",
