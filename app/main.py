@@ -48,7 +48,9 @@ async def add_security_headers(request: Request, call_next):
     # In production, you may want to restrict frame-ancestors to specific domains
     if "/embed/" in str(request.url.path):
         # Only allow iframe embedding for embed routes
-        response.headers.pop("X-Frame-Options", None)  # Remove if set by default
+        # Remove X-Frame-Options if it exists (MutableHeaders doesn't have pop)
+        if "X-Frame-Options" in response.headers:
+            del response.headers["X-Frame-Options"]
         response.headers["Content-Security-Policy"] = "frame-ancestors *"
     return response
 

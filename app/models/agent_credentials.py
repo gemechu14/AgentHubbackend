@@ -20,7 +20,7 @@ class AgentCredential(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     
     # Relationships
-    agent = relationship("Agent", backref="credentials")
+    agent = relationship("Agent", backref="credentials", lazy="select", passive_deletes=True)
     account = relationship("Account", backref="agent_credentials")
 
 
@@ -39,4 +39,5 @@ class AgentLaunchToken(Base):
     # Relationships
     credential = relationship("AgentCredential")
     agent = relationship("Agent")
+
 

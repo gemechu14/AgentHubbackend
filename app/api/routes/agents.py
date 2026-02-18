@@ -2,6 +2,7 @@ from uuid import UUID
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import delete
 
 from app.api.deps import get_db
 from app.api.deps_auth import current_user, require_role_for_account
@@ -25,7 +26,11 @@ from app.schemas.agent import (
 from app.core.security import now_utc
 from app.services.powerbi_service import check_connection, execute_dax, get_schema_dax, get_powerbi_token
 from app.services.powerbi_chat import chat_with_powerbi
+from app.models.agent_credentials import AgentCredential
+from app.schemas.agent_launch import AgentCredentialCreate, AgentCredentialOut
 import os
+import secrets
+import string
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -416,10 +421,266 @@ def delete_agent(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     
-    db.delete(agent)
-    db.commit()
+    # Delete agent (cascade will handle related records if tables exist)
+    # Handle case where agent_credentials table might not exist
+    try:
+        db.delete(agent)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        # If error is due to missing agent_credentials table, delete using raw SQL
+        if "agent_credentials" in str(e).lower() or "does not exist" in str(e).lower():
+            # Delete directly using SQL to avoid relationship loading
+            db.execute(delete(Agent).where(Agent.id == agent_id))
+            db.commit()
+        else:
+            raise
     
     return {"ok": True, "message": "Agent deleted successfully"}
+
+
+@router.post(
+    "/{account_id}/{agent_id}/credentials",
+    response_model=AgentCredentialOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create client credentials for agent embed",
+    description="""
+    Create client_id and client_secret for embedding an agent widget.
+    
+    These credentials are used with the /embed/launch endpoint to generate
+    secure launch tokens for the agent chatbot widget.
+    
+    The client_secret is only shown once on creation - store it securely.
+    
+    Requires OWNER, ADMIN, or MEMBER role for the account.
+    """,
+)
+def create_agent_credentials(
+    account_id: UUID,
+    agent_id: UUID,
+    body: AgentCredentialCreate,
+    tup = Depends(require_role_for_account({Role.OWNER, Role.ADMIN, Role.MEMBER})),
+    db: Session = Depends(get_db),
+):
+    """Create client credentials for agent embed widget."""
+    user, verified_account_id, _ = tup
+    
+    # Verify account_id matches
+    if verified_account_id != account_id:
+        raise HTTPException(status_code=403, detail="Account ID mismatch")
+    
+    # Verify agent exists and belongs to account
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.account_id == account_id
+    ).first()
+    
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Verify agent_id in body matches path parameter
+    if body.agent_id != agent_id:
+        raise HTTPException(status_code=400, detail="Agent ID mismatch")
+    
+    # Generate unique client_id (format: agent-{short-uuid})
+    # Using first 8 chars of UUID + random suffix for uniqueness
+    agent_uuid_short = str(agent_id).replace('-', '')[:8]
+    random_suffix = ''.join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(12))
+    client_id = f"agent-{agent_uuid_short}-{random_suffix}"
+    
+    # Generate secure client_secret (32 characters)
+    client_secret = secrets.token_urlsafe(32)
+    
+    # Check if client_id already exists (very unlikely but check anyway)
+    existing = db.query(AgentCredential).filter(AgentCredential.client_id == client_id).first()
+    if existing:
+        # Regenerate if collision (extremely rare)
+        random_suffix = ''.join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(12))
+        client_id = f"agent-{agent_uuid_short}-{random_suffix}"
+    
+    # Create credential
+    credential = AgentCredential(
+        agent_id=agent_id,
+        account_id=account_id,
+        client_id=client_id,
+        client_secret=client_secret,  # In production, hash this before storing
+        is_active=True
+    )
+    
+    db.add(credential)
+    db.commit()
+    db.refresh(credential)
+    
+    return AgentCredentialOut.from_orm(credential)
+
+
+@router.get(
+    "/{account_id}/{agent_id}/credentials",
+    response_model=List[AgentCredentialOut],
+    summary="List credentials for an agent",
+    description="""
+    Get all client credentials for an agent.
+    
+    Note: client_secret is NOT returned in list responses for security.
+    Only shown when creating new credentials.
+    
+    Requires OWNER, ADMIN, or MEMBER role for the account.
+    """,
+)
+def list_agent_credentials(
+    account_id: UUID,
+    agent_id: UUID,
+    tup = Depends(require_role_for_account({Role.OWNER, Role.ADMIN, Role.MEMBER})),
+    db: Session = Depends(get_db),
+):
+    """List all credentials for an agent."""
+    user, verified_account_id, _ = tup
+    
+    # Verify account_id matches
+    if verified_account_id != account_id:
+        raise HTTPException(status_code=403, detail="Account ID mismatch")
+    
+    # Verify agent exists and belongs to account
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.account_id == account_id
+    ).first()
+    
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Get credentials (exclude client_secret for security)
+    credentials = db.query(AgentCredential).filter(
+        AgentCredential.agent_id == agent_id,
+        AgentCredential.account_id == account_id
+    ).all()
+    
+    # Return without client_secret
+    result = []
+    for cred in credentials:
+        result.append(AgentCredentialOut(
+            id=str(cred.id),
+            agent_id=str(cred.agent_id),
+            client_id=cred.client_id,
+            client_secret="***hidden***",  # Don't expose secrets in list
+            account_id=str(cred.account_id),
+            is_active=cred.is_active,
+            created_at=cred.created_at.isoformat()
+        ))
+    
+    return result
+
+
+@router.delete(
+    "/{account_id}/{agent_id}/credentials/{credential_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Delete agent credentials",
+    description="""
+    Delete client credentials for an agent.
+    
+    This will invalidate the client_id/client_secret pair.
+    Any existing launch tokens using these credentials will no longer work.
+    
+    Requires OWNER, ADMIN, or MEMBER role for the account.
+    """,
+)
+def delete_agent_credentials(
+    account_id: UUID,
+    agent_id: UUID,
+    credential_id: UUID,
+    tup = Depends(require_role_for_account({Role.OWNER, Role.ADMIN, Role.MEMBER})),
+    db: Session = Depends(get_db),
+):
+    """Delete agent credentials."""
+    user, verified_account_id, _ = tup
+    
+    # Verify account_id matches
+    if verified_account_id != account_id:
+        raise HTTPException(status_code=403, detail="Account ID mismatch")
+    
+    # Verify agent exists and belongs to account
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.account_id == account_id
+    ).first()
+    
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Get credential
+    credential = db.query(AgentCredential).filter(
+        AgentCredential.id == credential_id,
+        AgentCredential.agent_id == agent_id,
+        AgentCredential.account_id == account_id
+    ).first()
+    
+    if not credential:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    
+    db.delete(credential)
+    db.commit()
+    
+    return {"ok": True, "message": "Credential deleted successfully"}
+
+
+@router.patch(
+    "/{account_id}/{agent_id}/credentials/{credential_id}/regenerate-secret",
+    response_model=AgentCredentialOut,
+    summary="Regenerate client secret",
+    description="""
+    Regenerate the client_secret for existing credentials.
+    
+    This will invalidate the old client_secret and generate a new one.
+    Update your integration to use the new secret.
+    
+    The new secret is only shown once in the response - store it securely.
+    
+    Requires OWNER, ADMIN, or MEMBER role for the account.
+    """,
+)
+def regenerate_client_secret(
+    account_id: UUID,
+    agent_id: UUID,
+    credential_id: UUID,
+    tup = Depends(require_role_for_account({Role.OWNER, Role.ADMIN, Role.MEMBER})),
+    db: Session = Depends(get_db),
+):
+    """Regenerate client secret for agent credentials."""
+    user, verified_account_id, _ = tup
+    
+    # Verify account_id matches
+    if verified_account_id != account_id:
+        raise HTTPException(status_code=403, detail="Account ID mismatch")
+    
+    # Verify agent exists and belongs to account
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.account_id == account_id
+    ).first()
+    
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Get credential
+    credential = db.query(AgentCredential).filter(
+        AgentCredential.id == credential_id,
+        AgentCredential.agent_id == agent_id,
+        AgentCredential.account_id == account_id
+    ).first()
+    
+    if not credential:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    
+    # Generate new secure client_secret
+    new_client_secret = secrets.token_urlsafe(32)
+    
+    # Update credential
+    credential.client_secret = new_client_secret  # In production, hash this before storing
+    credential.is_active = True  # Ensure it's active
+    db.commit()
+    db.refresh(credential)
+    
+    return AgentCredentialOut.from_orm(credential)
 
 
 @router.post(

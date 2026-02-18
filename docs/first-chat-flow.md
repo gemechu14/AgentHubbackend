@@ -272,3 +272,7 @@ const response = await sendMessage(accountId, agentId, chat.id, "What are the to
 - Schema is cached after first load (fast subsequent queries)
 
 
+
+
+
+

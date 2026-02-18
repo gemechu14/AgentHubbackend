@@ -7,7 +7,8 @@ from app.api.deps import get_db
 from app.models.agent import Agent, ConnectionType
 from app.models.agent_credentials import AgentCredential, AgentLaunchToken
 from app.schemas.agent_launch import AgentLaunchRequest, AgentLaunchResponse, AgentLaunchTokenValidation
-from app.core.security import make_agent_launch_token, decode_jwt, sha256, now_utc
+from app.core.security import sha256, now_utc
+import secrets
 from app.core.config import settings
 
 router = APIRouter(prefix="/embed", tags=["embed-launch"])
@@ -78,17 +79,13 @@ async def launch_agent_widget(
             detail=f"Chat only supported for POWERBI agents. This agent has type: {agent.connection_type.value}"
         )
     
-    # 3. Generate short-lived token (default 5 minutes)
+    # 3. Generate medium-length random token (32 bytes = ~43 chars)
     token_ttl = settings.launch_token_ttl_seconds
-    raw_token = make_agent_launch_token(
-        str(agent.id),
-        str(credential.id),
-        str(credential.account_id),
-        ttl_seconds=token_ttl
-    )
+    # Generate token (32 bytes = ~43 chars base64, remove padding = ~43 chars)
+    raw_token = secrets.token_urlsafe(32).rstrip('=')  # ~43 characters
     token_hash = sha256(raw_token)
     
-    # 4. Store token in database (for single-use tracking)
+    # 4. Store token in database with all necessary info
     expires_at = now_utc() + timedelta(seconds=token_ttl)
     launch_token = AgentLaunchToken(
         credential_id=credential.id,
@@ -99,7 +96,7 @@ async def launch_agent_widget(
     db.add(launch_token)
     db.commit()
     
-    # 5. Build frontend URL with token in fragment
+    # 5. Build frontend URL with short token in fragment
     frontend_url = f"{settings.app_base_url}/embed/chatbot#{raw_token}"
     
     return AgentLaunchResponse(frontend_url=frontend_url)
@@ -114,18 +111,8 @@ async def validate_agent_launch_token(
     Validate launch token and return agent details.
     Called by frontend to get agent config.
     """
-    import jwt
-    
     try:
-        # Decode JWT
-        payload = decode_jwt(token)
-        agent_id = payload.get("agent_id")
-        cred_id = payload.get("cred_id")
-        
-        if not agent_id or not cred_id:
-            raise HTTPException(status_code=400, detail="Invalid token payload")
-        
-        # Check token in database (single-use)
+        # Check token in database (short random token, not JWT)
         token_hash = sha256(token)
         launch_token = db.query(AgentLaunchToken).filter(
             AgentLaunchToken.token_hash == token_hash
@@ -134,18 +121,15 @@ async def validate_agent_launch_token(
         if not launch_token:
             raise HTTPException(status_code=401, detail="Token not found")
         
-        if launch_token.consumed_at:
-            raise HTTPException(status_code=401, detail="Token already used")
-        
+        # Check if token is expired (5 minutes from creation)
         if launch_token.expires_at < now_utc():
             raise HTTPException(status_code=401, detail="Token expired")
         
-        # Mark as consumed (single-use)
-        launch_token.consumed_at = now_utc()
-        db.commit()
+        # Don't mark as consumed - allow multiple uses within 5-minute window
+        # Token expires naturally after expires_at timestamp
         
         # Get agent
-        agent = db.get(Agent, UUID(agent_id))
+        agent = db.get(Agent, launch_token.agent_id)
         if not agent:
             raise HTTPException(status_code=404, detail="Agent not found")
         
@@ -156,8 +140,6 @@ async def validate_agent_launch_token(
             credential_id=str(launch_token.credential_id)
         )
         
-    except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
     except HTTPException:
         raise
     except Exception as e:

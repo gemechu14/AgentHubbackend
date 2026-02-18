@@ -47,5 +47,6 @@ class Agent(Base):
     # Relationships
     account = relationship("Account", backref="agents")
     creator = relationship("User", backref="created_agents")
+    # Note: credentials relationship is defined in AgentCredential model via backref
 
 

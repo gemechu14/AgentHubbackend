@@ -35,3 +35,7 @@ def downgrade() -> None:
     op.drop_column('agents', 'custom_tone_rows_enabled')
     op.drop_column('agents', 'custom_tone_schema_enabled')
 
+
+
+
+

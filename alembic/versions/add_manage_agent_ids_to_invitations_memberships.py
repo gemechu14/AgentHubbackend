@@ -33,3 +33,7 @@ def downgrade() -> None:
     op.drop_column('invitations', 'manage_agent_ids')
     op.drop_column('memberships', 'manage_agent_ids')
 
+
+
+
+
