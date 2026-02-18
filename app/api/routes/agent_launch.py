@@ -1,14 +1,12 @@
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from datetime import timedelta
 
 from app.api.deps import get_db
 from app.models.agent import Agent, ConnectionType
-from app.models.agent_credentials import AgentCredential, AgentLaunchToken
+from app.models.agent_credentials import AgentCredential
 from app.schemas.agent_launch import AgentLaunchRequest, AgentLaunchResponse, AgentLaunchTokenValidation
 from app.core.security import sha256, now_utc
-from sqlalchemy import delete
 import secrets
 from app.core.config import settings
 
@@ -21,12 +19,13 @@ async def launch_agent_widget(
     db: Session = Depends(get_db),
 ):
     """
-    Launch endpoint: Generate short-lived token and return frontend URL.
+    Launch endpoint: Generate token and return frontend URL.
     
-    Validates agent_id, invalidates all previous tokens for this agent,
-    creates new token, and returns URL with token in fragment.
+    Validates agent_id, creates new token (replaces any previous token for this agent),
+    and returns URL with token in query parameter.
     
-    Note: Generating a new token will invalidate all previous tokens for this agent.
+    Note: Generating a new token will replace the previous token for this agent.
+    Tokens do not expire.
     """
     
     # 1. Validate agent_id
@@ -77,28 +76,14 @@ async def launch_agent_widget(
             detail="Embed is currently disabled for this agent. Please enable it to use embed launch."
         )
     
-    # 2. Delete all previous tokens for this agent to invalidate old URLs
-    db.execute(
-        delete(AgentLaunchToken).where(AgentLaunchToken.agent_id == agent.id)
-    )
-    db.commit()
-    
-    # 3. Generate medium-length random token (32 bytes = ~43 chars)
-    token_ttl = settings.launch_token_ttl_seconds
+    # 2. Generate new token and store in credential
     # Generate token (32 bytes = ~43 chars base64, remove padding = ~43 chars)
     raw_token = secrets.token_urlsafe(32).rstrip('=')  # ~43 characters
     token_hash = sha256(raw_token)
     
-    # 4. Store new token in database with all necessary info
-    expires_at = now_utc() + timedelta(seconds=token_ttl)
-    launch_token = AgentLaunchToken(
-        credential_id=None,  # No longer required
-        agent_id=agent.id,
-        token_hash=token_hash,
-        raw_token=raw_token,  # Store raw token to build embed URLs
-        expires_at=expires_at,
-    )
-    db.add(launch_token)
+    # 3. Store token in credential (replaces any previous token)
+    credential.token_hash = token_hash
+    credential.raw_token = raw_token
     db.commit()
     
     # 4. Build frontend URL with token as query parameter
@@ -117,45 +102,23 @@ async def validate_agent_launch_token(
     Called by frontend to get agent config.
     """
     try:
-        # Check token in database (short random token, not JWT)
+        # Check token in credential (short random token, not JWT)
         token_hash = sha256(token)
-        launch_token = db.query(AgentLaunchToken).filter(
-            AgentLaunchToken.token_hash == token_hash
-        ).first()
-        
-        if not launch_token:
-            raise HTTPException(status_code=401, detail="Token not found")
-        
-        # Check if token is expired (5 minutes from creation)
-        if launch_token.expires_at < now_utc():
-            raise HTTPException(status_code=401, detail="Token expired")
-        
-        # Don't mark as consumed - allow multiple uses within 5-minute window
-        # Token expires naturally after expires_at timestamp
-        
-        # Get agent
-        agent = db.get(Agent, launch_token.agent_id)
-        if not agent:
-            raise HTTPException(status_code=404, detail="Agent not found")
-        
-        # Check if credential exists, create if missing
         credential = db.query(AgentCredential).filter(
-            AgentCredential.agent_id == launch_token.agent_id
+            AgentCredential.token_hash == token_hash
         ).first()
         
         if not credential:
-            # Auto-create credentials if they don't exist
-            credential = AgentCredential(
-                agent_id=launch_token.agent_id,
-                account_id=agent.account_id,
-                is_active=True
-            )
-            db.add(credential)
-            db.commit()
-            db.refresh(credential)
+            raise HTTPException(status_code=401, detail="Token not found")
         
+        # Check if credential is active
         if not credential.is_active:
             raise HTTPException(status_code=403, detail="Embed is currently disabled for this agent")
+        
+        # Get agent
+        agent = db.get(Agent, credential.agent_id)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
         
         return AgentLaunchTokenValidation(
             agent_id=str(agent.id),

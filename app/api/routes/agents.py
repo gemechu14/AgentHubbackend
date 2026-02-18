@@ -2,7 +2,6 @@ from uuid import UUID
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import delete
 
 from app.api.deps import get_db
 from app.api.deps_auth import current_user, require_role_for_account
@@ -29,12 +28,11 @@ from app.core.security import now_utc
 from app.services.powerbi_service import check_connection, execute_dax, get_schema_dax, get_powerbi_token
 from app.services.powerbi_chat import chat_with_powerbi
 from app.services.db_chat import chat_with_db
-from app.models.agent_credentials import AgentCredential, AgentLaunchToken
+from app.models.agent_credentials import AgentCredential
 from app.schemas.agent_launch import AgentCredentialCreate, AgentCredentialOut, AgentCredentialToggleRequest
 from app.core.config import settings
 from app.core.security import sha256, now_utc
 import secrets
-from sqlalchemy import delete
 from datetime import timedelta
 import os
 
@@ -510,26 +508,13 @@ def create_agent_credentials(
     # Generate embed_url if credential is active
     embed_url = None
     if credential.is_active:
-        # Delete all previous tokens for this agent
-        db.execute(
-            delete(AgentLaunchToken).where(AgentLaunchToken.agent_id == agent_id)
-        )
-        db.commit()
-        
-        # Generate new token
-        token_ttl = settings.launch_token_ttl_seconds
+        # Generate new token and store in credential
         raw_token = secrets.token_urlsafe(32).rstrip('=')
         token_hash = sha256(raw_token)
-        expires_at = now_utc() + timedelta(seconds=token_ttl)
         
-        launch_token = AgentLaunchToken(
-            credential_id=None,
-            agent_id=agent_id,
-            token_hash=token_hash,
-            raw_token=raw_token,  # Store raw token to build embed URLs
-            expires_at=expires_at,
-        )
-        db.add(launch_token)
+        # Store token in credential
+        credential.token_hash = token_hash
+        credential.raw_token = raw_token
         db.commit()
         
         # Build embed URL with token as query parameter
@@ -579,19 +564,12 @@ def list_agent_credentials(
     if not credential:
         return []
     
-    # Check if there's a valid (not expired) token for this agent
+    # Check if there's a token for this agent
     embed_url = None
     if credential.is_active:
-        # Find existing valid token (not expired)
-        existing_token = db.query(AgentLaunchToken).filter(
-            AgentLaunchToken.agent_id == agent_id,
-            AgentLaunchToken.expires_at > now_utc()
-        ).order_by(AgentLaunchToken.created_at.desc()).first()
-        
-        # If a valid token exists and we have the raw token, build the embed_url
-        # We don't generate new tokens here to avoid changing the URL on every GET request
-        if existing_token and existing_token.raw_token:
-            embed_url = f"{settings.app_base_url}/embed/chatbot?token={existing_token.raw_token}"
+        # Check if credential has a token
+        if credential.token_hash and credential.raw_token:
+            embed_url = f"{settings.app_base_url}/embed/chatbot?token={credential.raw_token}"
     
     return [AgentCredentialOut.from_orm(credential, embed_url=embed_url)]
 
@@ -702,26 +680,13 @@ def toggle_agent_credential_status(
     # Generate embed_url if credential is now active
     embed_url = None
     if credential.is_active:
-        # Delete all previous tokens for this agent
-        db.execute(
-            delete(AgentLaunchToken).where(AgentLaunchToken.agent_id == agent_id)
-        )
-        db.commit()
-        
-        # Generate new token
-        token_ttl = settings.launch_token_ttl_seconds
+        # Generate new token and store in credential
         raw_token = secrets.token_urlsafe(32).rstrip('=')
         token_hash = sha256(raw_token)
-        expires_at = now_utc() + timedelta(seconds=token_ttl)
         
-        launch_token = AgentLaunchToken(
-            credential_id=None,
-            agent_id=agent_id,
-            token_hash=token_hash,
-            raw_token=raw_token,  # Store raw token to build embed URLs
-            expires_at=expires_at,
-        )
-        db.add(launch_token)
+        # Store token in credential
+        credential.token_hash = token_hash
+        credential.raw_token = raw_token
         db.commit()
         
         # Build embed URL with token as query parameter
