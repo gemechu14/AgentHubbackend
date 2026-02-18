@@ -62,16 +62,21 @@ async def launch_agent_widget(
             detail=f"Chat only supported for POWERBI agents. This agent has type: {agent.connection_type.value}"
         )
     
-    # Check if credential exists and is active
+    # Check if credential exists, create if missing
     credential = db.query(AgentCredential).filter(
         AgentCredential.agent_id == agent_uuid
     ).first()
     
     if not credential:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Embed credentials not found for this agent. Please create credentials first."
+        # Auto-create credentials if they don't exist
+        credential = AgentCredential(
+            agent_id=agent_uuid,
+            account_id=agent.account_id,
+            is_active=True
         )
+        db.add(credential)
+        db.commit()
+        db.refresh(credential)
     
     if not credential.is_active:
         raise HTTPException(
@@ -139,13 +144,21 @@ async def validate_agent_launch_token(
         if not agent:
             raise HTTPException(status_code=404, detail="Agent not found")
         
-        # Check if credential exists and is active
+        # Check if credential exists, create if missing
         credential = db.query(AgentCredential).filter(
             AgentCredential.agent_id == launch_token.agent_id
         ).first()
         
         if not credential:
-            raise HTTPException(status_code=403, detail="Embed credentials not found for this agent")
+            # Auto-create credentials if they don't exist
+            credential = AgentCredential(
+                agent_id=launch_token.agent_id,
+                account_id=agent.account_id,
+                is_active=True
+            )
+            db.add(credential)
+            db.commit()
+            db.refresh(credential)
         
         if not credential.is_active:
             raise HTTPException(status_code=403, detail="Embed is currently disabled for this agent")
