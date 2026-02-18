@@ -134,10 +134,25 @@ class PowerBIChatRequest(BaseModel):
     question: str = Field(..., description="User's question about the Power BI data")
 
 
+class AgentChatRequest(BaseModel):
+    question: str = Field(..., description="User's question about the data")
+
+
 class PowerBIChatResponse(BaseModel):
     answer: str = Field(..., description="AI's answer to the question")
     resolution_note: str = Field(default="", description="Note about value resolution/typo correction")
     action: str = Field(..., description="Action taken: DESCRIBE, QUERY, or ERROR")
     dax_attempts: list[str] = Field(default_factory=list, description="List of DAX queries attempted")
     final_dax: str = Field(default="", description="Final DAX query that succeeded (if QUERY action)")
+    error: Optional[str] = Field(None, description="Error message if any")
+
+
+class AgentChatResponse(BaseModel):
+    answer: str = Field(..., description="AI's answer to the question")
+    resolution_note: str = Field(default="", description="Note about value resolution/typo correction")
+    action: str = Field(..., description="Action taken: DESCRIBE, QUERY, or ERROR")
+    dax_attempts: Optional[list[str]] = Field(default_factory=list, description="List of DAX queries attempted (for PowerBI)")
+    final_dax: Optional[str] = Field(default="", description="Final DAX query that succeeded (for PowerBI)")
+    sql_attempts: Optional[list[str]] = Field(default_factory=list, description="List of SQL queries attempted (for DB)")
+    final_sql: Optional[str] = Field(default="", description="Final SQL query that succeeded (for DB)")
     error: Optional[str] = Field(None, description="Error message if any")

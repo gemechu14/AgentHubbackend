@@ -102,6 +102,7 @@ async def launch_agent_widget(
         credential_id=None,  # No longer required
         agent_id=agent.id,
         token_hash=token_hash,
+        raw_token=raw_token,  # Store raw token to build embed URLs
         expires_at=expires_at,
     )
     db.add(launch_token)

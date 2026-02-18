@@ -22,10 +22,13 @@ from app.schemas.agent import (
     PowerBIGetSchemaRequest,
     PowerBIChatRequest,
     PowerBIChatResponse,
+    AgentChatRequest,
+    AgentChatResponse,
 )
 from app.core.security import now_utc
 from app.services.powerbi_service import check_connection, execute_dax, get_schema_dax, get_powerbi_token
 from app.services.powerbi_chat import chat_with_powerbi
+from app.services.db_chat import chat_with_db
 from app.models.agent_credentials import AgentCredential, AgentLaunchToken
 from app.schemas.agent_launch import AgentCredentialCreate, AgentCredentialOut, AgentCredentialToggleRequest
 from app.core.config import settings
@@ -523,6 +526,7 @@ def create_agent_credentials(
             credential_id=None,
             agent_id=agent_id,
             token_hash=token_hash,
+            raw_token=raw_token,  # Store raw token to build embed URLs
             expires_at=expires_at,
         )
         db.add(launch_token)
@@ -575,32 +579,19 @@ def list_agent_credentials(
     if not credential:
         return []
     
-    # Generate embed_url if credential is active
+    # Check if there's a valid (not expired) token for this agent
     embed_url = None
     if credential.is_active:
-        # Delete all previous tokens for this agent to ensure only one active token
-        db.execute(
-            delete(AgentLaunchToken).where(AgentLaunchToken.agent_id == agent_id)
-        )
-        db.commit()
+        # Find existing valid token (not expired)
+        existing_token = db.query(AgentLaunchToken).filter(
+            AgentLaunchToken.agent_id == agent_id,
+            AgentLaunchToken.expires_at > now_utc()
+        ).order_by(AgentLaunchToken.created_at.desc()).first()
         
-        # Generate new token
-        token_ttl = settings.launch_token_ttl_seconds
-        raw_token = secrets.token_urlsafe(32).rstrip('=')
-        token_hash = sha256(raw_token)
-        expires_at = now_utc() + timedelta(seconds=token_ttl)
-        
-        launch_token = AgentLaunchToken(
-            credential_id=None,
-            agent_id=agent_id,
-            token_hash=token_hash,
-            expires_at=expires_at,
-        )
-        db.add(launch_token)
-        db.commit()
-        
-        # Build embed URL with token as query parameter
-        embed_url = f"{settings.app_base_url}/embed/chatbot?token={raw_token}"
+        # If a valid token exists and we have the raw token, build the embed_url
+        # We don't generate new tokens here to avoid changing the URL on every GET request
+        if existing_token and existing_token.raw_token:
+            embed_url = f"{settings.app_base_url}/embed/chatbot?token={existing_token.raw_token}"
     
     return [AgentCredentialOut.from_orm(credential, embed_url=embed_url)]
 
@@ -727,6 +718,7 @@ def toggle_agent_credential_status(
             credential_id=None,
             agent_id=agent_id,
             token_hash=token_hash,
+            raw_token=raw_token,  # Store raw token to build embed URLs
             expires_at=expires_at,
         )
         db.add(launch_token)
@@ -916,30 +908,29 @@ def get_powerbi_schema(
 
 @router.post(
     "/{account_id}/{agent_id}/chat",
-    response_model=PowerBIChatResponse,
-    summary="Chat with Power BI agent",
+    response_model=AgentChatResponse,
+    summary="Chat with agent",
     description="""
-    Ask questions about your Power BI data using natural language.
+    Ask questions about your data using natural language.
     
     This endpoint implements the full chat-on-data functionality:
-    - Understands natural language questions
-    - Decides whether to answer from schema (DESCRIBE) or execute DAX queries (QUERY)
-    - Handles typos and value resolution automatically
-    - Executes DAX queries with automatic error correction
-    - Returns conversational, human-friendly answers
+    - For PowerBI agents: Understands natural language questions, decides whether to answer from schema (DESCRIBE) or execute DAX queries (QUERY), handles typos and value resolution automatically, executes DAX queries with automatic error correction
+    - For DB agents: Understands natural language questions, generates SQL queries, executes them, and returns conversational answers
     
-    The agent uses OpenAI to understand questions and generate DAX queries.
+    Returns conversational, human-friendly answers.
+    
+    The agent uses OpenAI to understand questions and generate queries (DAX for PowerBI, SQL for DB).
     Requires OWNER, ADMIN, MEMBER, or VIEWER role for the account.
     """,
 )
 def chat_with_agent(
     account_id: UUID,
     agent_id: UUID,
-    body: PowerBIChatRequest,
+    body: AgentChatRequest,
     tup = Depends(require_role_for_account({Role.OWNER, Role.ADMIN, Role.MEMBER, Role.VIEWER})),
     db: Session = Depends(get_db),
 ):
-    """Chat with Power BI agent."""
+    """Chat with agent (supports both PowerBI and DB connection types)."""
     user, verified_account_id, _ = tup
     
     # Verify account_id matches
@@ -955,22 +946,6 @@ def chat_with_agent(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     
-    # Only support POWERBI connection type
-    if agent.connection_type != ConnectionType.POWERBI:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Chat only supported for POWERBI agents. This agent has type: {agent.connection_type.value}"
-        )
-    
-    # Extract Power BI config
-    try:
-        config = PowerBIConfig(**agent.connection_config)
-    except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid Power BI configuration: {str(e)}"
-        )
-    
     # Get OpenAI API key from agent's api_key field or environment
     openai_api_key = agent.api_key or os.getenv("OPENAI_API_KEY")
     
@@ -980,29 +955,107 @@ def chat_with_agent(
             detail="OpenAI API key is required. Set it in the agent's api_key field or OPENAI_API_KEY environment variable."
         )
     
-    # Chat with Power BI (schema is automatically cached internally)
-    try:
-        result = chat_with_powerbi(
-            question=body.question,
-            tenant_id=config.tenant_id,
-            client_id=config.client_id,
-            workspace_id=config.workspace_id,
-            dataset_id=config.dataset_id,
-            client_secret=config.client_secret,
-            openai_api_key=openai_api_key,
-            custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
-            custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
-            custom_tone_schema=agent.custom_tone_schema,
-            custom_tone_rows=agent.custom_tone_rows,
-        )
-        return PowerBIChatResponse(**result)
-    except Exception as e:
-        return PowerBIChatResponse(
-            answer=f"An error occurred while processing your question: {str(e)}",
-            resolution_note="",
-            action="ERROR",
-            dax_attempts=[],
-            final_dax="",
-            error=str(e),
+    # Route to appropriate chat service based on connection type
+    if agent.connection_type == ConnectionType.POWERBI:
+        # Extract Power BI config
+        try:
+            config = PowerBIConfig(**agent.connection_config)
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid Power BI configuration: {str(e)}"
+            )
+        
+        # Chat with Power BI (schema is automatically cached internally)
+        try:
+            result = chat_with_powerbi(
+                question=body.question,
+                tenant_id=config.tenant_id,
+                client_id=config.client_id,
+                workspace_id=config.workspace_id,
+                dataset_id=config.dataset_id,
+                client_secret=config.client_secret,
+                openai_api_key=openai_api_key,
+                custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
+                custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
+                custom_tone_schema=agent.custom_tone_schema,
+                custom_tone_rows=agent.custom_tone_rows,
+            )
+            # Convert PowerBI result to unified response format
+            return AgentChatResponse(
+                answer=result.get("answer", ""),
+                resolution_note=result.get("resolution_note", ""),
+                action=result.get("action", "ERROR"),
+                dax_attempts=result.get("dax_attempts", []),
+                final_dax=result.get("final_dax", ""),
+                sql_attempts=[],
+                final_sql="",
+                error=result.get("error"),
+            )
+        except Exception as e:
+            return AgentChatResponse(
+                answer=f"An error occurred while processing your question: {str(e)}",
+                resolution_note="",
+                action="ERROR",
+                dax_attempts=[],
+                final_dax="",
+                sql_attempts=[],
+                final_sql="",
+                error=str(e),
+            )
+    
+    elif agent.connection_type == ConnectionType.DB:
+        # Extract DB config
+        try:
+            config = DBConfig(**agent.connection_config)
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid DB configuration: {str(e)}"
+            )
+        
+        # Chat with DB
+        try:
+            result = chat_with_db(
+                question=body.question,
+                database_type=config.database_type,
+                host=config.host,
+                port=config.port,
+                database=config.database,
+                username=config.username,
+                password=config.password,
+                openai_api_key=openai_api_key,
+                custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
+                custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
+                custom_tone_schema=agent.custom_tone_schema,
+                custom_tone_rows=agent.custom_tone_rows,
+            )
+            # Convert DB result to unified response format
+            return AgentChatResponse(
+                answer=result.get("answer", ""),
+                resolution_note=result.get("resolution_note", ""),
+                action=result.get("action", "ERROR"),
+                dax_attempts=[],
+                final_dax="",
+                sql_attempts=result.get("sql_attempts", []),
+                final_sql=result.get("final_sql", ""),
+                error=result.get("error"),
+            )
+        except Exception as e:
+            return AgentChatResponse(
+                answer=f"An error occurred while processing your question: {str(e)}",
+                resolution_note="",
+                action="ERROR",
+                dax_attempts=[],
+                final_dax="",
+                sql_attempts=[],
+                final_sql="",
+                error=str(e),
+            )
+    
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Chat not supported for connection type: {agent.connection_type.value}"
         )
 

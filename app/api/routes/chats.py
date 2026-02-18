@@ -22,8 +22,9 @@ from app.schemas.chat import (
     MessageUpdate,
     MessageResponse,
 )
-from app.schemas.agent import PowerBIConfig
+from app.schemas.agent import PowerBIConfig, DBConfig
 from app.services.powerbi_chat import chat_with_powerbi
+from app.services.db_chat import chat_with_db
 from app.core.security import now_utc
 
 router = APIRouter(prefix="/chats", tags=["chats"])
@@ -354,18 +355,18 @@ def delete_chat(
     response_model=MessageResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Send a message in a chat",
-    description="""
+    description=    """
     Send a message in a chat conversation and get an AI response.
     
     This endpoint:
     1. Stores the user's message
-    2. Processes it through the agent's chat service (Power BI chat)
+    2. Processes it through the agent's chat service (Power BI chat for POWERBI agents, DB chat for DB agents)
     3. Stores the assistant's response
     4. Returns both messages
     
     The chat title will be automatically updated based on the first message if it's still "New Chat".
     
-    Only works for agents with connection_type = POWERBI.
+    Supports both POWERBI and DB connection types.
     Requires OWNER, ADMIN, MEMBER, or VIEWER role for the account.
     """,
 )
@@ -396,13 +397,6 @@ def send_message(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     
-    # Only support POWERBI connection type
-    if agent.connection_type != ConnectionType.POWERBI:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Chat messages only supported for POWERBI agents. This agent has type: {agent.connection_type.value}"
-        )
-    
     # Get chat - ensure user can only access their own chats
     chat = db.query(Chat).filter(
         Chat.id == chat_id,
@@ -413,15 +407,6 @@ def send_message(
     
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
-    
-    # Extract Power BI config
-    try:
-        config = PowerBIConfig(**agent.connection_config)
-    except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid Power BI configuration: {str(e)}"
-        )
     
     # Get OpenAI API key from agent's api_key field or environment
     openai_api_key = agent.api_key or os.getenv("OPENAI_API_KEY")
@@ -450,30 +435,88 @@ def send_message(
         chat.title = title
         chat.updated_at = now_utc()
     
-    # Chat with Power BI
+    # Route to appropriate chat service based on connection type
     try:
-        result = chat_with_powerbi(
-            question=body.content,
-            tenant_id=config.tenant_id,
-            client_id=config.client_id,
-            workspace_id=config.workspace_id,
-            dataset_id=config.dataset_id,
-            client_secret=config.client_secret,
-            openai_api_key=openai_api_key,
-            custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
-            custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
-            custom_tone_schema=agent.custom_tone_schema,
-            custom_tone_rows=agent.custom_tone_rows,
-        )
+        if agent.connection_type == ConnectionType.POWERBI:
+            # Extract Power BI config
+            try:
+                config = PowerBIConfig(**agent.connection_config)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid Power BI configuration: {str(e)}"
+                )
+            
+            # Chat with Power BI
+            result = chat_with_powerbi(
+                question=body.content,
+                tenant_id=config.tenant_id,
+                client_id=config.client_id,
+                workspace_id=config.workspace_id,
+                dataset_id=config.dataset_id,
+                client_secret=config.client_secret,
+                openai_api_key=openai_api_key,
+                custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
+                custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
+                custom_tone_schema=agent.custom_tone_schema,
+                custom_tone_rows=agent.custom_tone_rows,
+            )
+            answer = result.get("answer", "")
+        
+        elif agent.connection_type == ConnectionType.DB:
+            # Extract DB config
+            try:
+                config = DBConfig(**agent.connection_config)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid DB configuration: {str(e)}"
+                )
+            
+            # Chat with DB
+            result = chat_with_db(
+                question=body.content,
+                database_type=config.database_type,
+                host=config.host,
+                port=config.port,
+                database=config.database,
+                username=config.username,
+                password=config.password,
+                openai_api_key=openai_api_key,
+                custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
+                custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
+                custom_tone_schema=agent.custom_tone_schema,
+                custom_tone_rows=agent.custom_tone_rows,
+            )
+            answer = result.get("answer", "")
+        
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Chat messages not supported for connection type: {agent.connection_type.value}"
+            )
         
         # Store assistant message
+        # Handle both PowerBI (dax_attempts, final_dax) and DB (sql_attempts, final_sql) results
+        # For DB agents, store SQL attempts in dax_attempts field and final_sql in final_dax field
+        if agent.connection_type == ConnectionType.DB:
+            # Store SQL attempts and final SQL in the DAX fields (for backward compatibility)
+            sql_attempts = result.get("sql_attempts", [])
+            final_sql = result.get("final_sql", "")
+            dax_attempts_data = json.dumps(sql_attempts) if sql_attempts else None
+            final_dax_data = final_sql if final_sql else None
+        else:
+            # PowerBI - use DAX fields as normal
+            dax_attempts_data = json.dumps(result.get("dax_attempts", [])) if result.get("dax_attempts") else None
+            final_dax_data = result.get("final_dax", "") if result.get("final_dax") else None
+        
         assistant_message = ChatMessage(
             chat_id=chat_id,
             role="assistant",
-            content=result.get("answer", ""),
+            content=answer,
             action=result.get("action"),
-            dax_attempts=json.dumps(result.get("dax_attempts", [])) if result.get("dax_attempts") else None,
-            final_dax=result.get("final_dax"),
+            dax_attempts=dax_attempts_data,
+            final_dax=final_dax_data,
             resolution_note=result.get("resolution_note"),
             error=result.get("error"),
         )

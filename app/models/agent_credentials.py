@@ -33,6 +33,7 @@ class AgentLaunchToken(Base):
     credential_id = Column(UUID(as_uuid=True), ForeignKey("agent_credentials.id", ondelete="CASCADE"), nullable=True)
     agent_id = Column(UUID(as_uuid=True), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
     token_hash = Column(String(128), unique=True, nullable=False, index=True)
+    raw_token = Column(String(200), nullable=True)  # Store raw token to build embed URLs (not used for validation)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     consumed_at = Column(DateTime(timezone=True), nullable=True)  # Single-use: mark when used
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
