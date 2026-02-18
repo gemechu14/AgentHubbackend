@@ -508,7 +508,7 @@ async def embed_chat(
 @router.get("/chatbot", response_class=HTMLResponse)
 async def chatbot_frontend_page(request: Request, db: Session = Depends(get_db)):
     """
-    Frontend page that extracts token from URL fragment and loads the chatbot widget.
+    Frontend page that extracts token from URL query parameter and loads the chatbot widget.
     This page validates the token and embeds the widget iframe.
     """
     html_content = """
@@ -597,9 +597,9 @@ async def chatbot_frontend_page(request: Request, db: Session = Depends(get_db))
         </div>
         
         <script>
-            // Extract token from URL fragment
-            const hash = window.location.hash.substring(1); // Remove #
-            const token = hash;
+            // Extract token from URL query parameter
+            const urlParams = new URLSearchParams(window.location.search);
+            const token = urlParams.get('token');
             
             const loadingDiv = document.getElementById('loading');
             const errorDiv = document.getElementById('error');

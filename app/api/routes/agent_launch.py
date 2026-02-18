@@ -1,13 +1,14 @@
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from app.api.deps import get_db
 from app.models.agent import Agent, ConnectionType
 from app.models.agent_credentials import AgentCredential, AgentLaunchToken
 from app.schemas.agent_launch import AgentLaunchRequest, AgentLaunchResponse, AgentLaunchTokenValidation
 from app.core.security import sha256, now_utc
+from sqlalchemy import delete
 import secrets
 from app.core.config import settings
 
@@ -22,30 +23,13 @@ async def launch_agent_widget(
     """
     Launch endpoint: Generate short-lived token and return frontend URL.
     
-    Validates client_id/client_secret and agent_id, creates single-use token,
-    and returns URL with token in fragment.
+    Validates agent_id, invalidates all previous tokens for this agent,
+    creates new token, and returns URL with token in fragment.
+    
+    Note: Generating a new token will invalidate all previous tokens for this agent.
     """
     
-    # 1. Validate credentials
-    credential = db.query(AgentCredential).filter(
-        AgentCredential.client_id == body.client_id,
-        AgentCredential.is_active == True
-    ).first()
-    
-    if not credential:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid client_id"
-        )
-    
-    # Verify client_secret (in production, compare hashed)
-    if credential.client_secret != body.client_secret:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid client_secret"
-        )
-    
-    # 2. Validate agent_id
+    # 1. Validate agent_id
     try:
         agent_uuid = UUID(body.agent_id)
     except ValueError:
@@ -55,14 +39,13 @@ async def launch_agent_widget(
         )
     
     agent = db.query(Agent).filter(
-        Agent.id == agent_uuid,
-        Agent.account_id == credential.account_id  # Verify agent belongs to same account
+        Agent.id == agent_uuid
     ).first()
     
     if not agent:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Agent not found or not accessible"
+            detail="Agent not found"
         )
     
     # Verify agent is active
@@ -79,16 +62,39 @@ async def launch_agent_widget(
             detail=f"Chat only supported for POWERBI agents. This agent has type: {agent.connection_type.value}"
         )
     
+    # Check if credential exists and is active
+    credential = db.query(AgentCredential).filter(
+        AgentCredential.agent_id == agent_uuid
+    ).first()
+    
+    if not credential:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Embed credentials not found for this agent. Please create credentials first."
+        )
+    
+    if not credential.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Embed is currently disabled for this agent. Please enable it to use embed launch."
+        )
+    
+    # 2. Delete all previous tokens for this agent to invalidate old URLs
+    db.execute(
+        delete(AgentLaunchToken).where(AgentLaunchToken.agent_id == agent.id)
+    )
+    db.commit()
+    
     # 3. Generate medium-length random token (32 bytes = ~43 chars)
     token_ttl = settings.launch_token_ttl_seconds
     # Generate token (32 bytes = ~43 chars base64, remove padding = ~43 chars)
     raw_token = secrets.token_urlsafe(32).rstrip('=')  # ~43 characters
     token_hash = sha256(raw_token)
     
-    # 4. Store token in database with all necessary info
+    # 4. Store new token in database with all necessary info
     expires_at = now_utc() + timedelta(seconds=token_ttl)
     launch_token = AgentLaunchToken(
-        credential_id=credential.id,
+        credential_id=None,  # No longer required
         agent_id=agent.id,
         token_hash=token_hash,
         expires_at=expires_at,
@@ -96,8 +102,8 @@ async def launch_agent_widget(
     db.add(launch_token)
     db.commit()
     
-    # 5. Build frontend URL with short token in fragment
-    frontend_url = f"{settings.app_base_url}/embed/chatbot#{raw_token}"
+    # 4. Build frontend URL with token as query parameter
+    frontend_url = f"{settings.app_base_url}/embed/chatbot?token={raw_token}"
     
     return AgentLaunchResponse(frontend_url=frontend_url)
 
@@ -133,11 +139,21 @@ async def validate_agent_launch_token(
         if not agent:
             raise HTTPException(status_code=404, detail="Agent not found")
         
+        # Check if credential exists and is active
+        credential = db.query(AgentCredential).filter(
+            AgentCredential.agent_id == launch_token.agent_id
+        ).first()
+        
+        if not credential:
+            raise HTTPException(status_code=403, detail="Embed credentials not found for this agent")
+        
+        if not credential.is_active:
+            raise HTTPException(status_code=403, detail="Embed is currently disabled for this agent")
+        
         return AgentLaunchTokenValidation(
             agent_id=str(agent.id),
             agent_name=agent.name,
-            account_id=str(launch_token.credential.account_id),
-            credential_id=str(launch_token.credential_id)
+            account_id=str(agent.account_id)
         )
         
     except HTTPException:

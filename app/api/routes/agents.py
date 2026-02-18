@@ -26,11 +26,14 @@ from app.schemas.agent import (
 from app.core.security import now_utc
 from app.services.powerbi_service import check_connection, execute_dax, get_schema_dax, get_powerbi_token
 from app.services.powerbi_chat import chat_with_powerbi
-from app.models.agent_credentials import AgentCredential
-from app.schemas.agent_launch import AgentCredentialCreate, AgentCredentialOut
-import os
+from app.models.agent_credentials import AgentCredential, AgentLaunchToken
+from app.schemas.agent_launch import AgentCredentialCreate, AgentCredentialOut, AgentCredentialToggleRequest
+from app.core.config import settings
+from app.core.security import sha256, now_utc
 import secrets
-import string
+from sqlalchemy import delete
+from datetime import timedelta
+import os
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -445,12 +448,10 @@ def delete_agent(
     status_code=status.HTTP_201_CREATED,
     summary="Create client credentials for agent embed",
     description="""
-    Create client_id and client_secret for embedding an agent widget.
+    Create credentials for embedding an agent widget.
     
     These credentials are used with the /embed/launch endpoint to generate
     secure launch tokens for the agent chatbot widget.
-    
-    The client_secret is only shown once on creation - store it securely.
     
     Requires OWNER, ADMIN, or MEMBER role for the account.
     """,
@@ -462,7 +463,7 @@ def create_agent_credentials(
     tup = Depends(require_role_for_account({Role.OWNER, Role.ADMIN, Role.MEMBER})),
     db: Session = Depends(get_db),
 ):
-    """Create client credentials for agent embed widget."""
+    """Create credentials for agent embed widget."""
     user, verified_account_id, _ = tup
     
     # Verify account_id matches
@@ -482,36 +483,55 @@ def create_agent_credentials(
     if body.agent_id != agent_id:
         raise HTTPException(status_code=400, detail="Agent ID mismatch")
     
-    # Generate unique client_id (format: agent-{short-uuid})
-    # Using first 8 chars of UUID + random suffix for uniqueness
-    agent_uuid_short = str(agent_id).replace('-', '')[:8]
-    random_suffix = ''.join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(12))
-    client_id = f"agent-{agent_uuid_short}-{random_suffix}"
+    # Check if credential already exists (only one per agent)
+    credential = db.query(AgentCredential).filter(
+        AgentCredential.agent_id == agent_id
+    ).first()
     
-    # Generate secure client_secret (32 characters)
-    client_secret = secrets.token_urlsafe(32)
+    if credential:
+        # Update existing credential (ensure it's active and account matches)
+        credential.account_id = account_id
+        credential.is_active = True
+    else:
+        # Create new credential
+        credential = AgentCredential(
+            agent_id=agent_id,
+            account_id=account_id,
+            is_active=True
+        )
+        db.add(credential)
     
-    # Check if client_id already exists (very unlikely but check anyway)
-    existing = db.query(AgentCredential).filter(AgentCredential.client_id == client_id).first()
-    if existing:
-        # Regenerate if collision (extremely rare)
-        random_suffix = ''.join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(12))
-        client_id = f"agent-{agent_uuid_short}-{random_suffix}"
-    
-    # Create credential
-    credential = AgentCredential(
-        agent_id=agent_id,
-        account_id=account_id,
-        client_id=client_id,
-        client_secret=client_secret,  # In production, hash this before storing
-        is_active=True
-    )
-    
-    db.add(credential)
     db.commit()
     db.refresh(credential)
     
-    return AgentCredentialOut.from_orm(credential)
+    # Generate embed_url if credential is active
+    embed_url = None
+    if credential.is_active:
+        # Delete all previous tokens for this agent
+        db.execute(
+            delete(AgentLaunchToken).where(AgentLaunchToken.agent_id == agent_id)
+        )
+        db.commit()
+        
+        # Generate new token
+        token_ttl = settings.launch_token_ttl_seconds
+        raw_token = secrets.token_urlsafe(32).rstrip('=')
+        token_hash = sha256(raw_token)
+        expires_at = now_utc() + timedelta(seconds=token_ttl)
+        
+        launch_token = AgentLaunchToken(
+            credential_id=None,
+            agent_id=agent_id,
+            token_hash=token_hash,
+            expires_at=expires_at,
+        )
+        db.add(launch_token)
+        db.commit()
+        
+        # Build embed URL with token as query parameter
+        embed_url = f"{settings.app_base_url}/embed/chatbot?token={raw_token}"
+    
+    return AgentCredentialOut.from_orm(credential, embed_url=embed_url)
 
 
 @router.get(
@@ -519,10 +539,7 @@ def create_agent_credentials(
     response_model=List[AgentCredentialOut],
     summary="List credentials for an agent",
     description="""
-    Get all client credentials for an agent.
-    
-    Note: client_secret is NOT returned in list responses for security.
-    Only shown when creating new credentials.
+    Get credential for an agent (only one per agent).
     
     Requires OWNER, ADMIN, or MEMBER role for the account.
     """,
@@ -533,7 +550,7 @@ def list_agent_credentials(
     tup = Depends(require_role_for_account({Role.OWNER, Role.ADMIN, Role.MEMBER})),
     db: Session = Depends(get_db),
 ):
-    """List all credentials for an agent."""
+    """Get credential for an agent (only one per agent)."""
     user, verified_account_id, _ = tup
     
     # Verify account_id matches
@@ -549,26 +566,43 @@ def list_agent_credentials(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     
-    # Get credentials (exclude client_secret for security)
-    credentials = db.query(AgentCredential).filter(
+    # Get credential (only one per agent)
+    credential = db.query(AgentCredential).filter(
         AgentCredential.agent_id == agent_id,
         AgentCredential.account_id == account_id
-    ).all()
+    ).first()
     
-    # Return without client_secret
-    result = []
-    for cred in credentials:
-        result.append(AgentCredentialOut(
-            id=str(cred.id),
-            agent_id=str(cred.agent_id),
-            client_id=cred.client_id,
-            client_secret="***hidden***",  # Don't expose secrets in list
-            account_id=str(cred.account_id),
-            is_active=cred.is_active,
-            created_at=cred.created_at.isoformat()
-        ))
+    if not credential:
+        return []
     
-    return result
+    # Generate embed_url if credential is active
+    embed_url = None
+    if credential.is_active:
+        # Delete all previous tokens for this agent to ensure only one active token
+        db.execute(
+            delete(AgentLaunchToken).where(AgentLaunchToken.agent_id == agent_id)
+        )
+        db.commit()
+        
+        # Generate new token
+        token_ttl = settings.launch_token_ttl_seconds
+        raw_token = secrets.token_urlsafe(32).rstrip('=')
+        token_hash = sha256(raw_token)
+        expires_at = now_utc() + timedelta(seconds=token_ttl)
+        
+        launch_token = AgentLaunchToken(
+            credential_id=None,
+            agent_id=agent_id,
+            token_hash=token_hash,
+            expires_at=expires_at,
+        )
+        db.add(launch_token)
+        db.commit()
+        
+        # Build embed URL with token as query parameter
+        embed_url = f"{settings.app_base_url}/embed/chatbot?token={raw_token}"
+    
+    return [AgentCredentialOut.from_orm(credential, embed_url=embed_url)]
 
 
 @router.delete(
@@ -576,9 +610,8 @@ def list_agent_credentials(
     status_code=status.HTTP_200_OK,
     summary="Delete agent credentials",
     description="""
-    Delete client credentials for an agent.
+    Delete credentials for an agent.
     
-    This will invalidate the client_id/client_secret pair.
     Any existing launch tokens using these credentials will no longer work.
     
     Requires OWNER, ADMIN, or MEMBER role for the account.
@@ -624,28 +657,27 @@ def delete_agent_credentials(
 
 
 @router.patch(
-    "/{account_id}/{agent_id}/credentials/{credential_id}/regenerate-secret",
+    "/{account_id}/{agent_id}/credentials/{credential_id}/toggle",
     response_model=AgentCredentialOut,
-    summary="Regenerate client secret",
+    summary="Toggle embed status",
     description="""
-    Regenerate the client_secret for existing credentials.
+    Enable or disable embed launch for an agent.
     
-    This will invalidate the old client_secret and generate a new one.
-    Update your integration to use the new secret.
-    
-    The new secret is only shown once in the response - store it securely.
+    When disabled (is_active=False), the embed launch endpoint will reject requests
+    and existing tokens will not validate.
     
     Requires OWNER, ADMIN, or MEMBER role for the account.
     """,
 )
-def regenerate_client_secret(
+def toggle_agent_credential_status(
     account_id: UUID,
     agent_id: UUID,
     credential_id: UUID,
+    body: AgentCredentialToggleRequest,
     tup = Depends(require_role_for_account({Role.OWNER, Role.ADMIN, Role.MEMBER})),
     db: Session = Depends(get_db),
 ):
-    """Regenerate client secret for agent credentials."""
+    """Toggle embed status for agent credentials."""
     user, verified_account_id, _ = tup
     
     # Verify account_id matches
@@ -671,16 +703,41 @@ def regenerate_client_secret(
     if not credential:
         raise HTTPException(status_code=404, detail="Credential not found")
     
-    # Generate new secure client_secret
-    new_client_secret = secrets.token_urlsafe(32)
-    
-    # Update credential
-    credential.client_secret = new_client_secret  # In production, hash this before storing
-    credential.is_active = True  # Ensure it's active
+    # Update status
+    credential.is_active = body.is_active
     db.commit()
     db.refresh(credential)
     
-    return AgentCredentialOut.from_orm(credential)
+    # Generate embed_url if credential is now active
+    embed_url = None
+    if credential.is_active:
+        # Delete all previous tokens for this agent
+        db.execute(
+            delete(AgentLaunchToken).where(AgentLaunchToken.agent_id == agent_id)
+        )
+        db.commit()
+        
+        # Generate new token
+        token_ttl = settings.launch_token_ttl_seconds
+        raw_token = secrets.token_urlsafe(32).rstrip('=')
+        token_hash = sha256(raw_token)
+        expires_at = now_utc() + timedelta(seconds=token_ttl)
+        
+        launch_token = AgentLaunchToken(
+            credential_id=None,
+            agent_id=agent_id,
+            token_hash=token_hash,
+            expires_at=expires_at,
+        )
+        db.add(launch_token)
+        db.commit()
+        
+        # Build embed URL with token as query parameter
+        embed_url = f"{settings.app_base_url}/embed/chatbot?token={raw_token}"
+    
+    return AgentCredentialOut.from_orm(credential, embed_url=embed_url)
+
+
 
 
 @router.post(
