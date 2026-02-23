@@ -60,15 +60,38 @@ async def launch_agent_widget(
     ).first()
     
     if not credential:
-        # Auto-create credentials if they don't exist
+        # Auto-create credentials if they don't exist with default theme
+        default_theme = {
+            "primary": "#0F172A",
+            "accent": "#3B82F6",
+            "background": "#F8FAFC",
+            "surface": "#FFFFFF",
+            "textPrimary": "#0F172A",
+            "border": "#E2E8F0",
+            "success": "#22C55E"
+        }
         credential = AgentCredential(
             agent_id=agent_uuid,
             account_id=agent.account_id,
-            is_active=True
+            is_active=True,
+            theme=default_theme
         )
         db.add(credential)
         db.commit()
         db.refresh(credential)
+    elif not credential.theme:
+        # If credential exists but no theme, set default theme
+        default_theme = {
+            "primary": "#0F172A",
+            "accent": "#3B82F6",
+            "background": "#F8FAFC",
+            "surface": "#FFFFFF",
+            "textPrimary": "#0F172A",
+            "border": "#E2E8F0",
+            "success": "#22C55E"
+        }
+        credential.theme = default_theme
+        db.commit()
     
     if not credential.is_active:
         raise HTTPException(
@@ -125,12 +148,26 @@ async def validate_agent_launch_token(
         if not isinstance(recommended_questions, list):
             recommended_questions = []
         
+        # Get theme from credential, or use default if not set
+        theme = credential.theme
+        if not theme:
+            theme = {
+                "primary": "#0F172A",
+                "accent": "#3B82F6",
+                "background": "#F8FAFC",
+                "surface": "#FFFFFF",
+                "textPrimary": "#0F172A",
+                "border": "#E2E8F0",
+                "success": "#22C55E"
+            }
+        
         return AgentLaunchTokenValidation(
             agent_id=str(agent.id),
             agent_name=agent.name,
             account_id=str(agent.account_id),
             status=agent.status,
-            recommended_questions=recommended_questions
+            recommended_questions=recommended_questions,
+            theme=theme
         )
         
     except HTTPException:

@@ -5,3 +5,4 @@ __pycache__/
 
 # Sphinx build output (but allow for GitHub Pages deployment)
 docs/_build/
+alembic/versions

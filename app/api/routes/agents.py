@@ -30,7 +30,7 @@ from app.services.powerbi_service import check_connection, execute_dax, get_sche
 from app.services.powerbi_chat import chat_with_powerbi
 from app.services.db_chat import chat_with_db, check_db_connection
 from app.models.agent_credentials import AgentCredential
-from app.schemas.agent_launch import AgentCredentialCreate, AgentCredentialOut, AgentCredentialToggleRequest
+from app.schemas.agent_launch import AgentCredentialCreate, AgentCredentialOut, AgentCredentialToggleRequest, AgentCredentialThemeUpdate
 from app.core.config import settings
 from app.core.security import sha256, now_utc
 import secrets
@@ -555,16 +555,31 @@ def create_agent_credentials(
         AgentCredential.agent_id == agent_id
     ).first()
     
+    # Default theme configuration
+    default_theme = {
+        "primary": "#0F172A",
+        "accent": "#3B82F6",
+        "background": "#F8FAFC",
+        "surface": "#FFFFFF",
+        "textPrimary": "#0F172A",
+        "border": "#E2E8F0",
+        "success": "#22C55E"
+    }
+    
     if credential:
         # Update existing credential (ensure it's active and account matches)
         credential.account_id = account_id
         credential.is_active = True
+        # Set default theme if not already set
+        if not credential.theme:
+            credential.theme = default_theme
     else:
-        # Create new credential
+        # Create new credential with default theme
         credential = AgentCredential(
             agent_id=agent_id,
             account_id=account_id,
-            is_active=True
+            is_active=True,
+            theme=default_theme
         )
         db.add(credential)
     
@@ -761,6 +776,61 @@ def toggle_agent_credential_status(
     return AgentCredentialOut.from_orm(credential, embed_url=embed_url)
 
 
+@router.patch(
+    "/{account_id}/{agent_id}/credentials/{credential_id}/theme",
+    response_model=AgentCredentialOut,
+    summary="Update embed widget theme",
+    description="""
+    Update the theme configuration for an agent's embed widget.
+    
+    The theme object should contain color values for:
+    - primary: Brand color
+    - accent: Buttons & actions color
+    - background: Chat body background
+    - surface: Input & cards background
+    - textPrimary: Main text color
+    - border: Separators color
+    - success: Online status color (optional)
+    
+    Requires OWNER, ADMIN, or MEMBER role for the account.
+    """,
+)
+def update_agent_credential_theme(
+    account_id: UUID,
+    agent_id: UUID,
+    credential_id: UUID,
+    body: AgentCredentialThemeUpdate,
+    tup = Depends(require_role_for_account({Role.OWNER, Role.ADMIN, Role.MEMBER})),
+    db: Session = Depends(get_db),
+):
+    """Update theme configuration for agent embed widget."""
+    user, verified_account_id, _ = tup
+    
+    # Verify account_id matches
+    if verified_account_id != account_id:
+        raise HTTPException(status_code=403, detail="Account ID mismatch")
+    
+    # Get credential
+    credential = db.query(AgentCredential).filter(
+        AgentCredential.id == credential_id,
+        AgentCredential.agent_id == agent_id,
+        AgentCredential.account_id == account_id
+    ).first()
+    
+    if not credential:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    
+    # Update theme
+    credential.theme = body.theme
+    db.commit()
+    db.refresh(credential)
+    
+    # Generate embed_url if credential is active
+    embed_url = None
+    if credential.is_active and credential.raw_token:
+        embed_url = f"{settings.app_base_url}/embed/chatbot?token={credential.raw_token}"
+    
+    return AgentCredentialOut.from_orm(credential, embed_url=embed_url)
 
 
 @router.post(
