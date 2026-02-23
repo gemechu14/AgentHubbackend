@@ -120,10 +120,16 @@ async def validate_agent_launch_token(
         if not agent:
             raise HTTPException(status_code=404, detail="Agent not found")
         
+        # Get recommended questions (ensure it's a list)
+        recommended_questions = agent.recommended_questions or []
+        if not isinstance(recommended_questions, list):
+            recommended_questions = []
+        
         return AgentLaunchTokenValidation(
             agent_id=str(agent.id),
             agent_name=agent.name,
-            account_id=str(agent.account_id)
+            account_id=str(agent.account_id),
+            recommended_questions=recommended_questions
         )
         
     except HTTPException:

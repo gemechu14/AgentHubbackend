@@ -36,6 +36,9 @@ class Agent(Base):
     custom_tone_schema = Column(Text, nullable=True)  # Custom tone for schema-based answers (PowerBI only)
     custom_tone_rows = Column(Text, nullable=True)  # Custom tone for row-based answers (PowerBI only)
     
+    # Recommended questions for embed widget (stored as JSON array for flexibility)
+    recommended_questions = Column(JSONB, nullable=True)  # Array of recommended questions to display in embed widget
+    
     # Foreign keys
     account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)

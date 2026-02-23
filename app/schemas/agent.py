@@ -47,6 +47,9 @@ class AgentCreate(BaseModel):
     custom_tone_rows_enabled: Optional[bool] = Field(default=False, description="Enable custom tone for row-based answers (PowerBI only)")
     custom_tone_schema: Optional[str] = Field(None, description="Custom tone text for schema-based answers (PowerBI only)")
     custom_tone_rows: Optional[str] = Field(None, description="Custom tone text for row-based answers (PowerBI only)")
+    
+    # Recommended questions for embed widget (array of strings)
+    recommended_questions: Optional[list[str]] = Field(None, description="List of recommended questions to display in embed widget")
 
 
 class AgentUpdate(BaseModel):
@@ -64,6 +67,9 @@ class AgentUpdate(BaseModel):
     custom_tone_rows_enabled: Optional[bool] = Field(None, description="Enable custom tone for row-based answers (PowerBI only)")
     custom_tone_schema: Optional[str] = Field(None, description="Custom tone text for schema-based answers (PowerBI only)")
     custom_tone_rows: Optional[str] = Field(None, description="Custom tone text for row-based answers (PowerBI only)")
+    
+    # Recommended questions for embed widget (array of strings)
+    recommended_questions: Optional[list[str]] = Field(None, description="List of recommended questions to display in embed widget")
 
 
 # Response schemas
@@ -89,6 +95,9 @@ class AgentOut(BaseModel):
     custom_tone_rows_enabled: bool
     custom_tone_schema: Optional[str]
     custom_tone_rows: Optional[str]
+    
+    # Recommended questions for embed widget (array of strings)
+    recommended_questions: Optional[list[str]]
 
 
 class AgentListOut(BaseModel):

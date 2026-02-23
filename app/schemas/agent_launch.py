@@ -15,6 +15,7 @@ class AgentLaunchTokenValidation(BaseModel):
     agent_id: str
     agent_name: str
     account_id: str
+    recommended_questions: Optional[list[str]] = Field(None, description="List of recommended questions for the embed widget")
 
 
 class AgentCredentialCreate(BaseModel):

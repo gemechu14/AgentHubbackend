@@ -276,6 +276,8 @@ def create_agent(
         custom_tone_rows_enabled=body.custom_tone_rows_enabled or False if body.connection_type == ConnectionTypeEnum.POWERBI else False,
         custom_tone_schema=body.custom_tone_schema if body.connection_type == ConnectionTypeEnum.POWERBI else None,
         custom_tone_rows=body.custom_tone_rows if body.connection_type == ConnectionTypeEnum.POWERBI else None,
+        # Recommended questions for embed widget (stored as JSON array)
+        recommended_questions=body.recommended_questions,
     )
     
     db.add(agent)

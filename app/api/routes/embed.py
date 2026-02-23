@@ -93,6 +93,16 @@ async def embed_widget(
     # Get base URL for API calls
     base_url = str(request.base_url).rstrip('/')
     
+    # Get recommended questions (handle both old format and new format)
+    import json
+    recommended_questions = agent.recommended_questions or []
+    # Ensure it's a list
+    if not isinstance(recommended_questions, list):
+        recommended_questions = []
+    
+    # Convert to JSON for JavaScript
+    recommended_questions_json = json.dumps(recommended_questions)
+    
     html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -239,6 +249,31 @@ async def embed_widget(
             .empty-state p {{
                 font-size: 14px;
             }}
+            
+            .recommended-questions {{
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                margin-top: 16px;
+            }}
+            
+            .recommended-question-btn {{
+                background: #f0f0f0;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                padding: 12px 16px;
+                text-align: left;
+                cursor: pointer;
+                transition: all 0.2s;
+                font-size: 14px;
+                color: #333;
+            }}
+            
+            .recommended-question-btn:hover {{
+                background: #e0e0e0;
+                border-color: #667eea;
+                transform: translateX(4px);
+            }}
         </style>
     </head>
     <body>
@@ -251,6 +286,7 @@ async def embed_widget(
             <div class="empty-state">
                 <h3>👋 Hello!</h3>
                 <p>Start a conversation by asking a question below.</p>
+                <div class="recommended-questions" id="recommendedQuestions"></div>
             </div>
         </div>
         
@@ -271,6 +307,26 @@ async def embed_widget(
             const messagesContainer = document.getElementById('messages');
             const messageInput = document.getElementById('messageInput');
             const sendButton = document.getElementById('sendButton');
+            const recommendedQuestions = {recommended_questions_json};
+            const recommendedQuestionsContainer = document.getElementById('recommendedQuestions');
+            
+            // Display recommended questions
+            if (recommendedQuestions && recommendedQuestions.length > 0) {{
+                recommendedQuestions.forEach(question => {{
+                    const btn = document.createElement('button');
+                    btn.className = 'recommended-question-btn';
+                    btn.textContent = question;
+                    btn.onclick = () => {{
+                        messageInput.value = question;
+                        messageInput.focus();
+                        // Optionally auto-send on click
+                        // sendMessage();
+                    }};
+                    recommendedQuestionsContainer.appendChild(btn);
+                }});
+            }} else {{
+                recommendedQuestionsContainer.style.display = 'none';
+            }}
             
             // Remove empty state when first message is sent
             let isEmpty = true;
