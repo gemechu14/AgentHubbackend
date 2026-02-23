@@ -129,6 +129,7 @@ async def validate_agent_launch_token(
             agent_id=str(agent.id),
             agent_name=agent.name,
             account_id=str(agent.account_id),
+            status=agent.status,
             recommended_questions=recommended_questions
         )
         

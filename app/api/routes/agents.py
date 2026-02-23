@@ -251,13 +251,8 @@ def create_agent(
     # Validate connection config
     validated_config = validate_connection_config(body.connection_type, body.connection_config)
     
-    # Validate custom tone settings - only allowed for POWERBI agents
-    if body.connection_type != ConnectionTypeEnum.POWERBI:
-        if body.custom_tone_schema_enabled or body.custom_tone_rows_enabled or body.custom_tone_schema or body.custom_tone_rows:
-            raise HTTPException(
-                status_code=400,
-                detail="Custom tone settings are only supported for POWERBI agents. Database agents always use the default tone."
-            )
+    # Custom tone settings are only used for POWERBI agents
+    # For DB agents, we silently ignore custom tone settings and set them to default values
     
     # Create agent
     agent = Agent(
@@ -271,7 +266,7 @@ def create_agent(
         connection_config=validated_config,
         account_id=account_id,
         created_by=user.id,
-        # Only set custom tone for POWERBI agents
+        # Only set custom tone for POWERBI agents (for DB agents, always use default/None)
         custom_tone_schema_enabled=body.custom_tone_schema_enabled or False if body.connection_type == ConnectionTypeEnum.POWERBI else False,
         custom_tone_rows_enabled=body.custom_tone_rows_enabled or False if body.connection_type == ConnectionTypeEnum.POWERBI else False,
         custom_tone_schema=body.custom_tone_schema if body.connection_type == ConnectionTypeEnum.POWERBI else None,
@@ -436,16 +431,18 @@ def update_agent(
         if "connection_type" in update_data:
             update_data["connection_type"] = ConnectionType(connection_type.value)
     
-    # Validate custom tone settings - only allowed for POWERBI agents
+    # Custom tone settings are only used for POWERBI agents
+    # For DB agents, we silently ignore custom tone settings and clear them
     if connection_type != ConnectionTypeEnum.POWERBI:
         # If switching to DB or already DB, clear custom tone settings
-        if "custom_tone_schema_enabled" in update_data or "custom_tone_rows_enabled" in update_data or "custom_tone_schema" in update_data or "custom_tone_rows" in update_data:
-            raise HTTPException(
-                status_code=400,
-                detail="Custom tone settings are only supported for POWERBI agents. Database agents always use the default tone."
-            )
-        # Clear existing custom tone if switching from POWERBI to DB
         if agent.connection_type == ConnectionType.POWERBI and connection_type == ConnectionTypeEnum.DB:
+            # Switching from POWERBI to DB - clear custom tone
+            update_data["custom_tone_schema_enabled"] = False
+            update_data["custom_tone_rows_enabled"] = False
+            update_data["custom_tone_schema"] = None
+            update_data["custom_tone_rows"] = None
+        elif "custom_tone_schema_enabled" in update_data or "custom_tone_rows_enabled" in update_data or "custom_tone_schema" in update_data or "custom_tone_rows" in update_data:
+            # DB agent trying to set custom tone - silently ignore and clear
             update_data["custom_tone_schema_enabled"] = False
             update_data["custom_tone_rows_enabled"] = False
             update_data["custom_tone_schema"] = None
