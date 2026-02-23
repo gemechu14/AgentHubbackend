@@ -42,11 +42,11 @@ class AgentCreate(BaseModel):
     # Connection config - can be either PowerBI or DB config
     connection_config: Dict[str, Any] = Field(..., description="Connection configuration based on connection_type")
     
-    # Custom tone settings for Power BI chat (only for POWERBI agents)
-    custom_tone_schema_enabled: Optional[bool] = Field(default=False, description="Enable custom tone for schema-based answers")
-    custom_tone_rows_enabled: Optional[bool] = Field(default=False, description="Enable custom tone for row-based answers")
-    custom_tone_schema: Optional[str] = Field(None, description="Custom tone text for schema-based answers")
-    custom_tone_rows: Optional[str] = Field(None, description="Custom tone text for row-based answers")
+    # Custom tone settings for Power BI chat (ONLY for POWERBI agents, not supported for DB agents)
+    custom_tone_schema_enabled: Optional[bool] = Field(default=False, description="Enable custom tone for schema-based answers (PowerBI only)")
+    custom_tone_rows_enabled: Optional[bool] = Field(default=False, description="Enable custom tone for row-based answers (PowerBI only)")
+    custom_tone_schema: Optional[str] = Field(None, description="Custom tone text for schema-based answers (PowerBI only)")
+    custom_tone_rows: Optional[str] = Field(None, description="Custom tone text for row-based answers (PowerBI only)")
 
 
 class AgentUpdate(BaseModel):
@@ -59,11 +59,11 @@ class AgentUpdate(BaseModel):
     connection_type: Optional[ConnectionTypeEnum] = Field(None, description="Connection type")
     connection_config: Optional[Dict[str, Any]] = Field(None, description="Connection configuration")
     
-    # Custom tone settings for Power BI chat (only for POWERBI agents)
-    custom_tone_schema_enabled: Optional[bool] = Field(None, description="Enable custom tone for schema-based answers")
-    custom_tone_rows_enabled: Optional[bool] = Field(None, description="Enable custom tone for row-based answers")
-    custom_tone_schema: Optional[str] = Field(None, description="Custom tone text for schema-based answers")
-    custom_tone_rows: Optional[str] = Field(None, description="Custom tone text for row-based answers")
+    # Custom tone settings for Power BI chat (ONLY for POWERBI agents, not supported for DB agents)
+    custom_tone_schema_enabled: Optional[bool] = Field(None, description="Enable custom tone for schema-based answers (PowerBI only)")
+    custom_tone_rows_enabled: Optional[bool] = Field(None, description="Enable custom tone for row-based answers (PowerBI only)")
+    custom_tone_schema: Optional[str] = Field(None, description="Custom tone text for schema-based answers (PowerBI only)")
+    custom_tone_rows: Optional[str] = Field(None, description="Custom tone text for row-based answers (PowerBI only)")
 
 
 # Response schemas
@@ -84,7 +84,7 @@ class AgentOut(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
     
-    # Custom tone settings for Power BI chat
+    # Custom tone settings for Power BI chat (ONLY for POWERBI agents, not supported for DB agents)
     custom_tone_schema_enabled: bool
     custom_tone_rows_enabled: bool
     custom_tone_schema: Optional[str]
@@ -103,6 +103,8 @@ class ConnectionCheckResponse(BaseModel):
     workspace_id: Optional[str] = Field(None, description="Power BI workspace ID")
     dataset_id: Optional[str] = Field(None, description="Power BI dataset ID")
     table_count: Optional[int] = Field(None, description="Number of tables found")
+    database_name: Optional[str] = Field(None, description="Database name (for DB connections)")
+    host: Optional[str] = Field(None, description="Database host (for DB connections)")
     error: Optional[str] = Field(None, description="Error message if connection failed")
 
 
@@ -128,6 +130,15 @@ class PowerBIGetSchemaRequest(BaseModel):
     workspace_id: str = Field(..., description="PowerBI Workspace ID")
     dataset_id: str = Field(..., description="PowerBI Dataset ID")
     client_secret: str = Field(..., description="PowerBI Client Secret")
+
+
+class DBTestConnectionRequest(BaseModel):
+    host: str = Field(..., description="Database host")
+    username: str = Field(..., description="Database username")
+    database: str = Field(..., description="Database name")
+    password: str = Field(..., description="Database password")
+    port: int = Field(..., description="Database port")
+    database_type: str = Field(..., description="Database type (e.g., postgresql, mysql, etc.)")
 
 
 class PowerBIChatRequest(BaseModel):

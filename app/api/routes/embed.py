@@ -475,6 +475,7 @@ async def embed_chat(
                 dataset_id=config.dataset_id,
                 client_secret=config.client_secret,
                 openai_api_key=openai_api_key,
+                model_type=agent.model_type,
                 custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
                 custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
                 custom_tone_schema=agent.custom_tone_schema,
@@ -500,7 +501,7 @@ async def embed_chat(
                     detail=f"Invalid DB configuration: {str(e)}"
                 )
             
-            # Chat with DB (non-persistent - no database storage)
+            # Chat with DB (non-persistent - no database storage, always uses default tone)
             result = chat_with_db(
                 question=body.question,
                 database_type=config.database_type,
@@ -510,10 +511,11 @@ async def embed_chat(
                 username=config.username,
                 password=config.password,
                 openai_api_key=openai_api_key,
-                custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
-                custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
-                custom_tone_schema=agent.custom_tone_schema,
-                custom_tone_rows=agent.custom_tone_rows,
+                model_type=agent.model_type,
+                custom_tone_schema_enabled=False,
+                custom_tone_rows_enabled=False,
+                custom_tone_schema=None,
+                custom_tone_rows=None,
             )
             
             return {

@@ -38,13 +38,130 @@ def build_db_uri(database_type: str, host: str, port: int, database: str, userna
         return f"{driver}://{encoded_username}:{encoded_password}@{host}:{port}/{database}"
 
 
-def get_llm(openai_api_key: str):
+def get_llm(openai_api_key: str, model_type: Optional[str] = None):
     """Get LangChain ChatOpenAI instance."""
+    # Use model_type from agent, fallback to gpt-4o-mini if not specified
+    model = model_type if model_type and model_type.strip() else "gpt-4o-mini"
     return ChatOpenAI(
-        model="gpt-4o-mini",
+        model=model,
         temperature=0,
         openai_api_key=openai_api_key,
     )
+
+
+def check_db_connection(
+    database_type: str,
+    host: str,
+    port: int,
+    database: str,
+    username: str,
+    password: str,
+) -> Dict[str, Any]:
+    """
+    Check database connection by attempting to connect and get table information.
+    
+    Args:
+        database_type: Type of database (postgresql, mysql, etc.)
+        host: Database host
+        port: Database port
+        database: Database name
+        username: Database username
+        password: Database password
+        
+    Returns:
+        Dictionary with connection status and details
+        
+    Raises:
+        Exception: If connection check fails
+    """
+    try:
+        # Build database URI
+        db_uri = build_db_uri(database_type, host, port, database, username, password)
+        
+        # Create SQLDatabase instance with better error handling
+        try:
+            db = SQLDatabase.from_uri(db_uri)
+            # Test the connection by trying to get table info
+            try:
+                table_info = db.get_table_info()
+                # Count tables from the table info string
+                # Try multiple patterns to count tables accurately
+                table_count = 0
+                
+                # Pattern 1: Look for CREATE TABLE statements
+                create_table_matches = re.findall(r'CREATE TABLE\s+(\w+)', table_info, re.IGNORECASE)
+                if create_table_matches:
+                    table_count = len(set(create_table_matches))
+                else:
+                    # Pattern 2: Look for table names in comments or descriptions
+                    table_name_matches = re.findall(r'Table:\s*(\w+)', table_info, re.IGNORECASE)
+                    if table_name_matches:
+                        table_count = len(set(table_name_matches))
+                    else:
+                        # Pattern 3: Try to find table references in the schema
+                        # This is a fallback - count distinct word patterns that might be table names
+                        # Look for patterns like "table_name.column_name"
+                        table_refs = re.findall(r'(\w+)\.\w+', table_info)
+                        if table_refs:
+                            table_count = len(set(table_refs))
+                
+                return {
+                    "connected": True,
+                    "message": f"Successfully connected to {database_type} database",
+                    "database_name": database,
+                    "host": host,
+                    "table_count": table_count if table_count > 0 else None,
+                }
+            except Exception as test_error:
+                error_msg = str(test_error)
+                if "could not translate host name" in error_msg.lower() or "name resolution" in error_msg.lower():
+                    raise Exception(f"Could not connect to database host '{host}'. Please check if the host is correct and reachable.")
+                elif "authentication failed" in error_msg.lower() or "password" in error_msg.lower() or "access denied" in error_msg.lower():
+                    raise Exception(f"Database authentication failed. Please check your username and password.")
+                elif "database" in error_msg.lower() and ("does not exist" in error_msg.lower() or "not found" in error_msg.lower()):
+                    raise Exception(f"Database '{database}' does not exist. Please check the database name.")
+                elif "connection refused" in error_msg.lower() or "connection timeout" in error_msg.lower() or "timeout" in error_msg.lower():
+                    raise Exception(f"Connection to database at '{host}:{port}' was refused or timed out. Please check if the database server is running and the port is correct.")
+                elif "no module named" in error_msg.lower():
+                    # Missing database driver
+                    if "psycopg2" in error_msg.lower() or "psycopg" in error_msg.lower():
+                        raise Exception(f"PostgreSQL driver not installed. Please install it with: pip install psycopg2-binary")
+                    elif "pymysql" in error_msg.lower():
+                        raise Exception(f"MySQL driver not installed. Please install it with: pip install pymysql")
+                    else:
+                        raise Exception(f"Database driver not installed. Error: {error_msg}")
+                else:
+                    raise Exception(f"Database connection error: {error_msg}")
+        except Exception as conn_error:
+            error_msg = str(conn_error)
+            # If it's already our formatted error, re-raise it
+            if "Could not connect" in error_msg or "authentication failed" in error_msg or "does not exist" in error_msg or "Connection to database" in error_msg or "driver not installed" in error_msg:
+                raise
+            # Otherwise, provide more helpful error messages
+            if "could not translate host name" in error_msg.lower() or "name resolution" in error_msg.lower():
+                raise Exception(f"Could not connect to database host '{host}'. Please check if the host is correct and reachable.")
+            elif "authentication failed" in error_msg.lower() or "password" in error_msg.lower() or "access denied" in error_msg.lower():
+                raise Exception(f"Database authentication failed. Please check your username and password.")
+            elif "database" in error_msg.lower() and ("does not exist" in error_msg.lower() or "not found" in error_msg.lower()):
+                raise Exception(f"Database '{database}' does not exist. Please check the database name.")
+            elif "connection refused" in error_msg.lower() or "connection timeout" in error_msg.lower() or "timeout" in error_msg.lower():
+                raise Exception(f"Connection to database at '{host}:{port}' was refused or timed out. Please check if the database server is running and the port is correct.")
+            elif "no module named" in error_msg.lower():
+                # Missing database driver
+                if "psycopg2" in error_msg.lower() or "psycopg" in error_msg.lower():
+                    raise Exception(f"PostgreSQL driver not installed. Please install it with: pip install psycopg2-binary")
+                elif "pymysql" in error_msg.lower():
+                    raise Exception(f"MySQL driver not installed. Please install it with: pip install pymysql")
+                else:
+                    raise Exception(f"Database driver not installed. Error: {error_msg}")
+            else:
+                raise Exception(f"Database connection error: {error_msg}")
+    except Exception as e:
+        return {
+            "connected": False,
+            "message": f"Connection failed: {str(e)}",
+            "error": str(e),
+        }
 
 
 # SQL generation prompt
@@ -124,13 +241,18 @@ def chat_with_db(
     username: str,
     password: str,
     openai_api_key: str,
-    custom_tone_schema_enabled: bool = False,
-    custom_tone_rows_enabled: bool = False,
-    custom_tone_schema: Optional[str] = None,
-    custom_tone_rows: Optional[str] = None,
+    model_type: Optional[str] = None,  # Model type from agent (e.g., "gpt-4o-mini", "gpt-4", etc.)
+    custom_tone_schema_enabled: bool = False,  # Ignored - always uses default tone for DB agents
+    custom_tone_rows_enabled: bool = False,  # Ignored - always uses default tone for DB agents
+    custom_tone_schema: Optional[str] = None,  # Ignored - always uses default tone for DB agents
+    custom_tone_rows: Optional[str] = None,  # Ignored - always uses default tone for DB agents
 ) -> Dict[str, Any]:
     """
     Main chat function - processes a question about database data.
+    
+    Note: Custom tone parameters are kept for backward compatibility but are COMPLETELY IGNORED.
+    Database agents ALWAYS use the default tone, even if custom_tone_*_enabled is True.
+    Custom tone is only supported for PowerBI agents.
     
     Args:
         question: User's question about the database
@@ -141,10 +263,10 @@ def chat_with_db(
         username: Database username
         password: Database password
         openai_api_key: OpenAI API key
-        custom_tone_schema_enabled: If True, use custom_tone_schema for schema-based answers
-        custom_tone_rows_enabled: If True, use custom_tone_rows for row-based answers
-        custom_tone_schema: Custom tone/style text for schema-based answers (when enabled)
-        custom_tone_rows: Custom tone/style text for row-based answers (when enabled)
+        custom_tone_schema_enabled: (Deprecated - not used, always uses default tone)
+        custom_tone_rows_enabled: (Deprecated - not used, always uses default tone)
+        custom_tone_schema: (Deprecated - not used, always uses default tone)
+        custom_tone_rows: (Deprecated - not used, always uses default tone)
     
     Returns:
         {
@@ -212,7 +334,11 @@ def chat_with_db(
                 raise Exception(f"Database connection error: {error_msg}")
         
         # Initialize LLM
-        llm = get_llm(openai_api_key)
+        llm = get_llm(openai_api_key, model_type=model_type)
+        
+        # IMPORTANT: Custom tone parameters are completely ignored for database agents
+        # Even if custom_tone_schema_enabled or custom_tone_rows_enabled is True, we always use default tone
+        # Custom tone is only supported for PowerBI agents
         
         # Get schema with error handling
         def get_schema(_):
@@ -248,11 +374,10 @@ def chat_with_db(
             | StrOutputParser()
         )
         
-        # Determine tone for answer prompt
-        answer_tone = (
-            custom_tone_rows.strip()
-            if custom_tone_rows_enabled and custom_tone_rows
-            else """You are a helpful, friendly data assistant.
+        # Determine tone for answer prompt (always use default tone for database agents)
+        # Custom tone parameters are completely ignored - database agents always use default tone
+        # Even if custom_tone_rows_enabled is True, we ignore it and use default tone
+        answer_tone = """You are a helpful, friendly data assistant.
 
 Style:
 - Conversational
@@ -262,7 +387,6 @@ Style:
 Grounding:
 - Do NOT invent values.
 - Only use what appears in the SQL response."""
-        )
         
         # Create answer prompt with custom tone
         answer_prompt_with_tone = ChatPromptTemplate.from_template(

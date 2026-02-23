@@ -20,10 +20,12 @@ _schema_cache: Dict[str, str] = {}
 
 
 # Initialize LLM
-def get_llm(openai_api_key: str):
+def get_llm(openai_api_key: str, model_type: Optional[str] = None):
     """Get LangChain ChatOpenAI instance."""
+    # Use model_type from agent, fallback to gpt-4o-mini if not specified
+    model = model_type if model_type and model_type.strip() else "gpt-4o-mini"
     return ChatOpenAI(
-        model="gpt-4o-mini",
+        model=model,
         temperature=0,
         openai_api_key=openai_api_key,
     )
@@ -486,6 +488,7 @@ def chat_with_powerbi(
     dataset_id: str,
     client_secret: str,
     openai_api_key: str,
+    model_type: Optional[str] = None,  # Model type from agent (e.g., "gpt-4o-mini", "gpt-4", etc.)
     custom_tone_schema_enabled: bool = False,
     custom_tone_rows_enabled: bool = False,
     custom_tone_schema: Optional[str] = None,
@@ -561,7 +564,7 @@ def chat_with_powerbi(
                 }
 
     # Initialize LLM
-    llm = get_llm(openai_api_key)
+    llm = get_llm(openai_api_key, model_type=model_type)
 
     # Resolve user value typos if needed
     question, resolution_note = resolve_user_value_if_needed(

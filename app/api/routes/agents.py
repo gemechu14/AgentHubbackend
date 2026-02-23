@@ -19,6 +19,7 @@ from app.schemas.agent import (
     SchemaResponse,
     PowerBITestConnectionRequest,
     PowerBIGetSchemaRequest,
+    DBTestConnectionRequest,
     PowerBIChatRequest,
     PowerBIChatResponse,
     AgentChatRequest,
@@ -27,7 +28,7 @@ from app.schemas.agent import (
 from app.core.security import now_utc
 from app.services.powerbi_service import check_connection, execute_dax, get_schema_dax, get_powerbi_token
 from app.services.powerbi_chat import chat_with_powerbi
-from app.services.db_chat import chat_with_db
+from app.services.db_chat import chat_with_db, check_db_connection
 from app.models.agent_credentials import AgentCredential
 from app.schemas.agent_launch import AgentCredentialCreate, AgentCredentialOut, AgentCredentialToggleRequest
 from app.core.config import settings
@@ -72,6 +73,46 @@ def test_powerbi_connection_standalone(
             workspace_id=body.workspace_id,
             dataset_id=body.dataset_id,
             client_secret=body.client_secret,
+        )
+        return ConnectionCheckResponse(**result)
+    except Exception as e:
+        return ConnectionCheckResponse(
+            connected=False,
+            message=f"Connection check failed: {str(e)}",
+            error=str(e),
+        )
+
+
+@router.post(
+    "/test-db-connection",
+    response_model=ConnectionCheckResponse,
+    summary="Test DB connection (standalone)",
+    description="""
+    Test database connection with provided credentials.
+    
+    This endpoint allows you to test database connectivity without creating an agent.
+    Simply provide all required database credentials in the request body.
+    
+    This endpoint:
+    - Attempts to connect to the database using the provided credentials
+    - Retrieves table information to verify connectivity
+    - Returns connection status and basic database information
+    
+    No authentication required (public endpoint for testing).
+    """,
+)
+def test_db_connection_standalone(
+    body: DBTestConnectionRequest,
+):
+    """Test database connection with provided credentials."""
+    try:
+        result = check_db_connection(
+            database_type=body.database_type,
+            host=body.host,
+            port=body.port,
+            database=body.database,
+            username=body.username,
+            password=body.password,
         )
         return ConnectionCheckResponse(**result)
     except Exception as e:
@@ -210,6 +251,14 @@ def create_agent(
     # Validate connection config
     validated_config = validate_connection_config(body.connection_type, body.connection_config)
     
+    # Validate custom tone settings - only allowed for POWERBI agents
+    if body.connection_type != ConnectionTypeEnum.POWERBI:
+        if body.custom_tone_schema_enabled or body.custom_tone_rows_enabled or body.custom_tone_schema or body.custom_tone_rows:
+            raise HTTPException(
+                status_code=400,
+                detail="Custom tone settings are only supported for POWERBI agents. Database agents always use the default tone."
+            )
+    
     # Create agent
     agent = Agent(
         name=body.name,
@@ -222,10 +271,11 @@ def create_agent(
         connection_config=validated_config,
         account_id=account_id,
         created_by=user.id,
-        custom_tone_schema_enabled=body.custom_tone_schema_enabled or False,
-        custom_tone_rows_enabled=body.custom_tone_rows_enabled or False,
-        custom_tone_schema=body.custom_tone_schema,
-        custom_tone_rows=body.custom_tone_rows,
+        # Only set custom tone for POWERBI agents
+        custom_tone_schema_enabled=body.custom_tone_schema_enabled or False if body.connection_type == ConnectionTypeEnum.POWERBI else False,
+        custom_tone_rows_enabled=body.custom_tone_rows_enabled or False if body.connection_type == ConnectionTypeEnum.POWERBI else False,
+        custom_tone_schema=body.custom_tone_schema if body.connection_type == ConnectionTypeEnum.POWERBI else None,
+        custom_tone_rows=body.custom_tone_rows if body.connection_type == ConnectionTypeEnum.POWERBI else None,
     )
     
     db.add(agent)
@@ -373,14 +423,31 @@ def update_agent(
     # Update fields
     update_data = body.model_dump(exclude_unset=True)
     
+    # Determine the connection type (new or existing)
+    connection_type = ConnectionTypeEnum(update_data.get("connection_type", agent.connection_type.value))
+    
     # Handle connection config validation if connection_type or connection_config is being updated
     if "connection_type" in update_data or "connection_config" in update_data:
-        connection_type = ConnectionTypeEnum(update_data.get("connection_type", agent.connection_type.value))
         connection_config = update_data.get("connection_config", agent.connection_config)
         validated_config = validate_connection_config(connection_type, connection_config)
         update_data["connection_config"] = validated_config
         if "connection_type" in update_data:
             update_data["connection_type"] = ConnectionType(connection_type.value)
+    
+    # Validate custom tone settings - only allowed for POWERBI agents
+    if connection_type != ConnectionTypeEnum.POWERBI:
+        # If switching to DB or already DB, clear custom tone settings
+        if "custom_tone_schema_enabled" in update_data or "custom_tone_rows_enabled" in update_data or "custom_tone_schema" in update_data or "custom_tone_rows" in update_data:
+            raise HTTPException(
+                status_code=400,
+                detail="Custom tone settings are only supported for POWERBI agents. Database agents always use the default tone."
+            )
+        # Clear existing custom tone if switching from POWERBI to DB
+        if agent.connection_type == ConnectionType.POWERBI and connection_type == ConnectionTypeEnum.DB:
+            update_data["custom_tone_schema_enabled"] = False
+            update_data["custom_tone_rows_enabled"] = False
+            update_data["custom_tone_schema"] = None
+            update_data["custom_tone_rows"] = None
     
     # Update model fields
     for field, value in update_data.items():
@@ -941,6 +1008,7 @@ def chat_with_agent(
                 dataset_id=config.dataset_id,
                 client_secret=config.client_secret,
                 openai_api_key=openai_api_key,
+                model_type=agent.model_type,
                 custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
                 custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
                 custom_tone_schema=agent.custom_tone_schema,
@@ -979,7 +1047,7 @@ def chat_with_agent(
                 detail=f"Invalid DB configuration: {str(e)}"
             )
         
-        # Chat with DB
+        # Chat with DB (always uses default tone, custom tone is only for PowerBI)
         try:
             result = chat_with_db(
                 question=body.question,
@@ -990,10 +1058,11 @@ def chat_with_agent(
                 username=config.username,
                 password=config.password,
                 openai_api_key=openai_api_key,
-                custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
-                custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
-                custom_tone_schema=agent.custom_tone_schema,
-                custom_tone_rows=agent.custom_tone_rows,
+                model_type=agent.model_type,
+                custom_tone_schema_enabled=False,
+                custom_tone_rows_enabled=False,
+                custom_tone_schema=None,
+                custom_tone_rows=None,
             )
             # Convert DB result to unified response format
             return AgentChatResponse(

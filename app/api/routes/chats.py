@@ -456,6 +456,7 @@ def send_message(
                 dataset_id=config.dataset_id,
                 client_secret=config.client_secret,
                 openai_api_key=openai_api_key,
+                model_type=agent.model_type,
                 custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
                 custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
                 custom_tone_schema=agent.custom_tone_schema,
@@ -473,7 +474,7 @@ def send_message(
                     detail=f"Invalid DB configuration: {str(e)}"
                 )
             
-            # Chat with DB
+            # Chat with DB (always uses default tone, custom tone is only for PowerBI)
             result = chat_with_db(
                 question=body.content,
                 database_type=config.database_type,
@@ -483,10 +484,11 @@ def send_message(
                 username=config.username,
                 password=config.password,
                 openai_api_key=openai_api_key,
-                custom_tone_schema_enabled=agent.custom_tone_schema_enabled or False,
-                custom_tone_rows_enabled=agent.custom_tone_rows_enabled or False,
-                custom_tone_schema=agent.custom_tone_schema,
-                custom_tone_rows=agent.custom_tone_rows,
+                model_type=agent.model_type,
+                custom_tone_schema_enabled=False,
+                custom_tone_rows_enabled=False,
+                custom_tone_schema=None,
+                custom_tone_rows=None,
             )
             answer = result.get("answer", "")
         

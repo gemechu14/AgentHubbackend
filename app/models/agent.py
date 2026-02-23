@@ -30,11 +30,11 @@ class Agent(Base):
     # For DB: host, username, database, password, port, databasetype
     connection_config = Column(JSONB, nullable=False)
     
-    # Custom tone settings for Power BI chat (per agent)
+    # Custom tone settings for Power BI chat (ONLY for POWERBI agents, not used for DB agents)
     custom_tone_schema_enabled = Column(Boolean, nullable=False, default=False)
     custom_tone_rows_enabled = Column(Boolean, nullable=False, default=False)
-    custom_tone_schema = Column(Text, nullable=True)  # Custom tone for schema-based answers
-    custom_tone_rows = Column(Text, nullable=True)  # Custom tone for row-based answers
+    custom_tone_schema = Column(Text, nullable=True)  # Custom tone for schema-based answers (PowerBI only)
+    custom_tone_rows = Column(Text, nullable=True)  # Custom tone for row-based answers (PowerBI only)
     
     # Foreign keys
     account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
